@@ -17,7 +17,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>1.0</string>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>This app needs access to your music library to play songs.</string>
 	<key>UIBackgroundModes</key>
