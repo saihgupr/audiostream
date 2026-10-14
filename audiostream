@@ -1,0 +1,128 @@
+#!/bin/sh
+
+DAEMON_PATH=""
+if [ -x /var/jb/usr/libexec/audiostreamerd ]; then
+    DAEMON_PATH="/var/jb/usr/libexec/audiostreamerd"
+elif [ -x /usr/libexec/audiostreamerd ]; then
+    DAEMON_PATH="/usr/libexec/audiostreamerd"
+else
+    echo "Error: audiostreamerd binary not found!"
+    exit 1
+fi
+
+LOG_PATH="/tmp/audiostreamer.log"
+
+case "$1" in
+    start)
+        # Kill any existing daemon & monitor to ensure clean port binding
+        HAD_RUNNING=0
+        if [ -f "/tmp/autooff_monitor.pid" ]; then
+            MONITOR_PID=$(cat /tmp/autooff_monitor.pid)
+            kill -9 "$MONITOR_PID" 2>/dev/null
+            rm -f /tmp/autooff_monitor.pid
+            HAD_RUNNING=1
+        fi
+        if killall -9 audiostreamerd 2>/dev/null; then
+            HAD_RUNNING=1
+        fi
+        for pid in $(ps aux 2>/dev/null | grep -i '[a]udiostreamerd' | grep -v ' Z ' | awk '{print $2}'); do
+            kill -9 "$pid" 2>/dev/null
+            HAD_RUNNING=1
+            while kill -0 "$pid" 2>/dev/null; do
+                sleep 0.05
+            done
+        done
+        if [ "$HAD_RUNNING" = "1" ]; then
+            sleep 0.2
+        fi
+        echo "Starting AudioStream server..."
+        
+        # Check if auto-off flag was passed OR if enabled via app settings file
+        AUTO_OFF_ENABLED=0
+        if [ "$2" = "--auto-off" ] || [ "$2" = "-a" ]; then
+            AUTO_OFF_ENABLED=1
+        elif [ -f "/tmp/audiostream_autooff.enabled" ] && [ "$(cat /tmp/audiostream_autooff.enabled)" = "1" ]; then
+            AUTO_OFF_ENABLED=1
+        fi
+        
+        if [ "$AUTO_OFF_ENABLED" = "1" ]; then
+            # Get timeout
+            TIMEOUT=600
+            if [ -f "/tmp/audiostream_autooff.timeout" ]; then
+                TIMEOUT=$(cat /tmp/audiostream_autooff.timeout)
+            fi
+            echo "Auto-off monitoring enabled (${TIMEOUT}s timeout)."
+            
+            # Clean start: truncate log
+            > "$LOG_PATH"
+            
+            nohup "$DAEMON_PATH" >> "$LOG_PATH" 2>&1 &
+            DAEMON_PID=$!
+            
+            # Write the autooff monitor script dynamically
+            cat << 'EOF' > /tmp/autooff_monitor.sh
+#!/bin/sh
+trap '' HUP
+LOG="/tmp/audiostreamer.log"
+TIMEOUT=$1
+DAEMON_PID=$2
+LAST_COUNT=0
+LAST_ACTIVITY=$(date +%s)
+
+while true; do
+    sleep 15
+    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+        exit 0
+    fi
+    # Count incoming requests representing legitimate media streaming and library operations.
+    # Exclude ping/status health checks so client presence probes don't prevent the iPhone from idling down.
+    CURR=$(grep 'Request: ' "$LOG" 2>/dev/null | grep -v -E '(/(api/)?(ping|status))' | wc -l | tr -d ' ')
+    if [ "$CURR" -gt "$LAST_COUNT" ]; then
+        LAST_COUNT=$CURR
+        LAST_ACTIVITY=$(date +%s)
+    fi
+    AGE=$(( $(date +%s) - LAST_ACTIVITY ))
+    if [ "$AGE" -ge "$TIMEOUT" ]; then
+        echo "[$(date)] Auto-off monitor: idle ${AGE}s >= ${TIMEOUT}s, killing daemon PID $DAEMON_PID" >> "$LOG"
+        kill -9 "$DAEMON_PID" 2>/dev/null
+        exit 0
+    fi
+done
+EOF
+            chmod +x /tmp/autooff_monitor.sh
+            # Spawn monitor script detached
+            nohup /tmp/autooff_monitor.sh "$TIMEOUT" "$DAEMON_PID" >/dev/null 2>&1 &
+            MONITOR_PID=$!
+            echo "$MONITOR_PID" > /tmp/autooff_monitor.pid
+        else
+            nohup "$DAEMON_PATH" >> "$LOG_PATH" 2>&1 &
+        fi
+        echo "Started successfully."
+        ;;
+    stop)
+        echo "Stopping AudioStream server..."
+        if [ -f "/tmp/autooff_monitor.pid" ]; then
+            MONITOR_PID=$(cat /tmp/autooff_monitor.pid)
+            kill -9 "$MONITOR_PID" 2>/dev/null
+            rm -f /tmp/autooff_monitor.pid
+        fi
+        killall -9 audiostreamerd 2>/dev/null
+        for pid in $(ps aux 2>/dev/null | grep -i '[a]udiostreamerd' | grep -v ' Z ' | awk '{print $2}'); do
+            kill -9 "$pid" 2>/dev/null
+        done
+        echo "Stopped."
+        ;;
+    status)
+        if ps aux 2>/dev/null | grep -i '[a]udiostreamerd' | grep -v ' Z ' >/dev/null; then
+            echo "AudioStream server is running."
+            exit 0
+        else
+            echo "AudioStream server is stopped."
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Usage: audiostream {start|stop|status} [--auto-off]"
+        exit 1
+        ;;
+esac

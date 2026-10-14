@@ -1,0 +1,53 @@
+# Xcode
+#
+build/
+DerivedData/
+*.hmap
+*.ipa
+*.xcuserstate
+project.xcworkspace/xcuserdata/
+project.xcworkspace/xcshareddata/swiftpm/configuration/
+*.xcuserdata
+
+# Apple
+#
+.DS_Store
+
+# Swift Package Manager
+#
+.build/
+.swiftpm/
+
+# Optional: Carthage
+#
+Carthage/Build/
+
+# Local Output Data
+songs.json
+history.json
+
+# Build Logs & Output
+build_output.txt
+xcodebuild_log.txt
+
+# Local Backup, Deploy & Python Scripts
+__pycache__/
+backup_music.py
+sync_incremental_backup.py
+import_from_mac.sh
+sampler.py
+deploy.sh
+deploy_ipad.sh
+
+# Environment & Secrets
+.env
+.env.local
+
+# Private Keys & Certs
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.mobileprovision

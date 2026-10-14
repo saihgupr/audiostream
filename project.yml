@@ -1,0 +1,43 @@
+name: AudioStream
+options:
+  bundleIdPrefix: com.saihgupr
+  deploymentTarget:
+    iOS: 14.6
+  xcodeVersion: 15.0 # Adjust based on user's Xcode
+targets:
+  audiostream:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - Models
+      - Services
+      - UI
+    dependencies:
+      - sdk: libsqlite3.tbd
+    settings:
+      base:
+        PRODUCT_NAME: AudioStream
+        INFOPLIST_FILE: App/Info.plist
+        IPHONEOS_DEPLOYMENT_TARGET: 14.6
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        DEVELOPMENT_TEAM: "" # Leave empty or set if known, usually automatic signing handles local dev if setup
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-" 
+        CODE_SIGN_ENTITLEMENTS: App/AudioStream.entitlements
+        # PROVISIONING_PROFILE_SPECIFIER: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO 
+        ENABLE_BITCODE: NO
+        SWIFT_VERSION: 5.0
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2" # iPhone, iPad
+    info:
+      path: App/Info.plist
+      properties:
+        UILaunchStoryboardName: LaunchScreen
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        "UISupportedInterfaceOrientations~ipad": [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSAppleMusicUsageDescription: "This app needs access to your music library to play songs."
+        UIBackgroundModes: [audio]
