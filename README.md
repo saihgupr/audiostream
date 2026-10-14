@@ -1,6 +1,6 @@
 # AudioStream <img src="images/Icon.png" width="80" align="right" alt="AudioStream" />
 
-AudioStream is a self-hosted music server for jailbroken iOS. It serves your device's native iTunes library over HTTP, letting you stream your own collection to the AudioStream app or any compatible client on your network.
+AudioStream is a self-hosted music server for jailbroken iOS. It serves your device's native iTunes library over HTTP or locally, letting you stream your own collection to the AudioStream app or any compatible client on your network.
 
 <p align="center">
   <a href="#features">Features</a> •
