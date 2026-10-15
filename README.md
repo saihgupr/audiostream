@@ -80,6 +80,14 @@ audiostream status
 
 ---
 
+## Browser
+
+<p align="center">
+  <img src="images/screenshot_browser.png" width="22%" alt="Library — Albums view" />
+</p>
+
+---
+
 ## Apple Watch & Remote Controls
 
 AudioStream maps system Now Playing remote feedback actions to in-app functions, available from the Apple Watch "..." (More) menu and the iOS Lock Screen.
