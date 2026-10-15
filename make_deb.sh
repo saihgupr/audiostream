@@ -60,7 +60,7 @@ xcodebuild archive \
     -destination "generic/platform=iOS" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
-    | grep -E "^(error:|warning:|Build succeeded|** ARCHIVE)" || true
+    | grep -E "^(error:|warning:|Build succeeded|\*\* ARCHIVE)" || true
 
 if [ ! -d "$ARCHIVE_PATH" ]; then
     echo "❌ Archive failed — $ARCHIVE_PATH not found"
@@ -126,26 +126,44 @@ rm -f "$DEB_PATH"
 if command -v dpkg-deb &>/dev/null; then
     dpkg-deb -Zgzip -b "$STAGING" "$DEB_PATH"
 else
-    # Fallback: manual ar archive (no dpkg-deb needed)
-    echo "⚠️  dpkg-deb not found, using manual ar packaging..."
+    echo "📦 Packaging deb archive using python3..."
 
-    # control.tar.gz
+    # control.tar.gz (archive files directly inside DEBIAN directory)
     CONTROL_TAR="$BUILD_DIR/control.tar.gz"
-    (cd "$STAGING" && tar -czf "$CONTROL_TAR" ./DEBIAN)
+    (cd "$CONTROL_DIR" && COPYFILE_DISABLE=1 tar -czf "$CONTROL_TAR" .)
 
-    # data.tar.gz (everything except DEBIAN)
+    # data.tar.gz (everything in staging except DEBIAN)
     DATA_TAR="$BUILD_DIR/data.tar.gz"
-    (cd "$STAGING" && tar --exclude=./DEBIAN -czf "$DATA_TAR" .)
+    (cd "$STAGING" && COPYFILE_DISABLE=1 tar -czf "$DATA_TAR" var)
 
-    # debian-binary
-    DEBIAN_BIN="$BUILD_DIR/debian-binary"
-    echo "2.0" > "$DEBIAN_BIN"
+    # Assemble debian archive: debian-binary, control.tar.gz, data.tar.gz
+    python3 - "$DEB_PATH" "$CONTROL_TAR" "$DATA_TAR" << 'PYEOF'
+import sys, os
 
-    # Assemble with ar
-    rm -f "$DEB_PATH"
-    ar rcs "$DEB_PATH" "$DEBIAN_BIN" "$CONTROL_TAR" "$DATA_TAR"
+deb_path, control_tar, data_tar = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    rm -f "$CONTROL_TAR" "$DATA_TAR" "$DEBIAN_BIN"
+def ar_header(name, size):
+    return f"{name:<16}{0:<12}{0:<6}{0:<6}{100644:<8}{size:<10}".encode('ascii') + b"`\n"
+
+with open(deb_path, "wb") as deb:
+    deb.write(b"!<arch>\n")
+    # 1. debian-binary
+    deb.write(ar_header("debian-binary", 4) + b"2.0\n")
+    # 2. control.tar.gz
+    with open(control_tar, "rb") as f:
+        c_bytes = f.read()
+    deb.write(ar_header("control.tar.gz", len(c_bytes)) + c_bytes)
+    if len(c_bytes) % 2 != 0:
+        deb.write(b"\n")
+    # 3. data.tar.gz
+    with open(data_tar, "rb") as f:
+        d_bytes = f.read()
+    deb.write(ar_header("data.tar.gz", len(d_bytes)) + d_bytes)
+    if len(d_bytes) % 2 != 0:
+        deb.write(b"\n")
+PYEOF
+
+    rm -f "$CONTROL_TAR" "$DATA_TAR"
 fi
 
 rm -rf "$STAGING"

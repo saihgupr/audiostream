@@ -2,7 +2,7 @@ name: AudioStream
 options:
   bundleIdPrefix: com.saihgupr
   deploymentTarget:
-    iOS: 14.6
+    iOS: 15.0
   xcodeVersion: 15.0 # Adjust based on user's Xcode
 targets:
   audiostream:
@@ -19,7 +19,7 @@ targets:
       base:
         PRODUCT_NAME: AudioStream
         INFOPLIST_FILE: App/Info.plist
-        IPHONEOS_DEPLOYMENT_TARGET: 14.6
+        IPHONEOS_DEPLOYMENT_TARGET: 15.0
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         DEVELOPMENT_TEAM: "" # Leave empty or set if known, usually automatic signing handles local dev if setup
         CODE_SIGN_STYLE: Manual

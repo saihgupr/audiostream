@@ -101,6 +101,16 @@ Standard controls (shuffle, repeat, scrubbing, queue index) are fully supported 
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 - Jailbroken iOS device with `appinst`, `sbdidlaunch`, and `sshpass` available
 
+### Install via Sileo / Zebra
+
+Add the RemoteCompanion Repo to your package manager of choice:
+
+- **Repository URL:** `https://saihgupr.github.io/remotecompanion/`
+- **[Add to Sileo](sileo://source/https://saihgupr.github.io/remotecompanion/)**
+- **[Add to Zebra](zbra://sources/add/https://saihgupr.github.io/remotecompanion/)**
+
+Once added, search for **AudioStream** and tap Install.
+
 ### Generate the Xcode project
 
 ```bash
