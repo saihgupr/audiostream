@@ -83,7 +83,7 @@ audiostream status
 ## Browser
 
 <p align="center">
-  <img src="images/screenshot_browser.png" width="22%" alt="Library — Albums view" />
+  <img src="images/screenshot_browser.png" width="100%" alt="Browser" />
 </p>
 
 ---
