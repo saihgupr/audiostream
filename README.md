@@ -37,6 +37,7 @@ AudioStream is a self-hosted music server for jailbroken iOS. It serves your dev
 - **Track Deletion** — Delete songs directly from the track context menu or swipe-to-delete, with automatic disk cleanup and library state sync.
 - **Auto-off Idle Protection** — A detached background monitor (`autooff_monitor.sh`) watches HTTP traffic and shuts down the daemon after 10 minutes of inactivity to preserve battery.
 - **Apple Watch and Lock Screen Controls** — Full integration with `MPRemoteCommandCenter` and `MPNowPlayingInfoCenter`. Supports shuffle, repeat, scrubbing, and queue position reporting from the system Now Playing interface without requiring a watchOS app.
+- **RemoteCompanion Integration** — Supports actions such as shuffle all songs, queue current album, and queue current artist from the RemoteCompanion app.
 - **Command Line Administration** — A helper (`audiostream`) installed to `/var/jb/usr/bin/` for starting, stopping, and querying the daemon directly from the terminal.
 
 ---
@@ -111,11 +112,12 @@ Standard controls (shuffle, repeat, scrubbing, queue index) are fully supported 
 
 ### Install via Sileo / Zebra
 
-Add the RemoteCompanion Repo to your package manager of choice:
+Add the AudioStream Repo to your package manager of choice:
 
 - **Repository URL:** `https://saihgupr.github.io/audiostream/`
-- **[Add to Sileo](sileo://source/https://saihgupr.github.io/audiostream/)**
-- **[Add to Zebra](zbra://sources/add/https://saihgupr.github.io/audiostream/)**
+
+- **Sileo:** `sileo://source/https://saihgupr.github.io/audiostream/`
+- **Zebra:** `zbra://sources/add/https://saihgupr.github.io/audiostream/`
 
 Once added, search for **AudioStream** and tap Install.
 
