@@ -1,0 +1,30 @@
+Package: com.saihgupr.audiostream
+Name: AudioStream
+Version: 1.0
+Architecture: iphoneos-arm
+Description: A self-hosted music server for jailbroken iOS. Stream your native iTunes library over HTTP or play locally, with hybrid local/remote playback, album art downloading, smart playlists, and Apple Watch controls. https://github.com/saihgupr/AudioStream
+Icon: https://saihgupr.github.io/audiostream/CydiaIcon.png
+Maintainer: Saihgupr
+Author: Saihgupr
+Section: Applications
+Filename: ./com.saihgupr.audiostream_1.0_iphoneos-arm.deb
+Size: 1772138
+MD5sum: 9be45954e28ff1641e64b9994ee8a7f3
+SHA1: 938801d314577b6f7b3d9925bcc9def338ececd9
+SHA256: 4dbeaa8665b4c77780b8bdb93004cec89ee4007bf53e70ecd00cfc75fe112d13
+
+Package: com.saihgupr.audiostream
+Name: AudioStream
+Version: 1.0
+Architecture: iphoneos-arm64
+Description: A self-hosted music server for jailbroken iOS. Stream your native iTunes library over HTTP or play locally, with hybrid local/remote playback, album art downloading, smart playlists, and Apple Watch controls. https://github.com/saihgupr/AudioStream
+Icon: https://saihgupr.github.io/audiostream/CydiaIcon.png
+Maintainer: Saihgupr
+Author: Saihgupr
+Section: Applications
+Filename: ./com.saihgupr.audiostream_1.0_iphoneos-arm64.deb
+Size: 1772288
+MD5sum: 63420c003d628b2a0f4cb29446379ba6
+SHA1: a0092a6efa5eb377eec85b27ca6077ac61b4f855
+SHA256: a45820f148681465e00b7e06f3c6a8598195925b434980bf3fb4d5337a99d153
+

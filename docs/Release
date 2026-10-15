@@ -1,0 +1,19 @@
+Origin: AudioStream Repo
+Label: AudioStream
+Icon: https://saihgupr.github.io/audiostream/CydiaIcon.png
+Suite: stable
+Version: 1.0
+Codename: ios
+Components: main
+Architectures: iphoneos-arm iphoneos-arm64
+Description: AudioStream — A self-hosted music server for jailbroken iOS. Stream your iTunes library over HTTP or play locally.
+MD5Sum:
+ b1b9ea36295dd464c23683076264a877 1418 Packages
+ fc7af6ca390cb7c93adedcceced0818c 600 Packages.gz
+ af77b536aa424711b6b567abc6173916 722 Packages.bz2
+ 9356eb088db8fe4d93e870879efd74e2 587 Packages.zst
+SHA256:
+ fa910dff289fc21f54954e3905973a83dcfa4b26b12ebfbadc95f49ba26c02c0 1418 Packages
+ d3531c81526fe673c8d75ebd5a80785d0c6e7c98bce9cf9f32e826285c471cfa 600 Packages.gz
+ 1a27daeb8e19412d6ae6bf782f77714793033695f63a719b7c792571e7ab4cd5 722 Packages.bz2
+ 0983431aea681ee0bb09b165893dcb0347994b3487f4237aa7e27a0328627357 587 Packages.zst

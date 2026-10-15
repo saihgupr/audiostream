@@ -21,7 +21,8 @@ CONTROL_FILE="$PROJECT_ROOT/package/control"
 BUILD_DIR="$PROJECT_ROOT/build"
 ARCHIVE_PATH="$BUILD_DIR/$PROJECT_NAME.xcarchive"
 
-COPY_TO=""
+DOCS_DIR="$PROJECT_ROOT/docs"
+COPY_TO="$DOCS_DIR"
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --copy-to) COPY_TO="$2"; shift ;;
@@ -88,56 +89,55 @@ fi
 ldid -S"$ENTITLEMENTS" "$BINARY"
 echo "✅ Signed"
 
-# ── 5. Build .deb layout ──────────────────────────────────────────────────────
-echo "📦 Assembling .deb layout..."
-STAGING="$BUILD_DIR/deb_staging"
-rm -rf "$STAGING"
+# ── Helper to package a single flavor ─────────────────────────────────────────
+pack_flavor() {
+    local FLAVOR="$1"           # "rootless" or "rootful"
+    local ARCH="$2"             # "iphoneos-arm64" or "iphoneos-arm"
+    local INSTALL_DIR="$3"      # "/var/jb/Applications" or "/Applications"
+    local FLAVOR_DEB_NAME="com.saihgupr.audiostream_${VERSION}_${ARCH}.deb"
+    local FLAVOR_DEB_PATH="$BUILD_DIR/$FLAVOR_DEB_NAME"
 
-# Rootless path: /var/jb/Applications/
-APP_INSTALL_DIR="$STAGING/var/jb/Applications"
-mkdir -p "$APP_INSTALL_DIR"
-cp -R "$APP_BUNDLE" "$APP_INSTALL_DIR/"
+    echo "📦 Packaging $FLAVOR ($ARCH) → $FLAVOR_DEB_NAME..."
+    local STAGING="$BUILD_DIR/deb_staging_$FLAVOR"
+    rm -rf "$STAGING"
+    mkdir -p "$STAGING$INSTALL_DIR"
+    cp -R "$APP_BUNDLE" "$STAGING$INSTALL_DIR/"
 
-# Control
-CONTROL_DIR="$STAGING/DEBIAN"
-mkdir -p "$CONTROL_DIR"
-cp "$CONTROL_FILE" "$CONTROL_DIR/control"
+    # Control directory
+    local CONTROL_DIR="$STAGING/DEBIAN"
+    mkdir -p "$CONTROL_DIR"
+    sed "s/^Architecture:.*/Architecture: $ARCH/" "$CONTROL_FILE" > "$CONTROL_DIR/control"
 
-# Post-install: register with uicache
-cat > "$CONTROL_DIR/postinst" << 'POSTINST'
+    # Postinst
+    cat > "$CONTROL_DIR/postinst" << POSTINST
 #!/bin/bash
-if [ -d /var/jb/Applications/AudioStream.app ]; then
-    uicache -p /var/jb/Applications/AudioStream.app 2>/dev/null || true
+if [ -d "$INSTALL_DIR/AudioStream.app" ]; then
+    uicache -p "$INSTALL_DIR/AudioStream.app" 2>/dev/null || true
 fi
 POSTINST
-chmod 755 "$CONTROL_DIR/postinst"
+    chmod 755 "$CONTROL_DIR/postinst"
 
-# Pre-remove: kill running instance
-cat > "$CONTROL_DIR/prerm" << 'PRERM'
+    # Prerm
+    cat > "$CONTROL_DIR/prerm" << 'PRERM'
 #!/bin/bash
 killall -9 AudioStream 2>/dev/null || true
 PRERM
-chmod 755 "$CONTROL_DIR/prerm"
+    chmod 755 "$CONTROL_DIR/prerm"
 
-# ── 6. Package ────────────────────────────────────────────────────────────────
-echo "🔨 Running dpkg-deb..."
-rm -f "$DEB_PATH"
-
-if command -v dpkg-deb &>/dev/null; then
-    dpkg-deb -Zgzip -b "$STAGING" "$DEB_PATH"
-else
-    echo "📦 Packaging deb archive using python3..."
-
-    # control.tar.gz (archive files directly inside DEBIAN directory)
-    CONTROL_TAR="$BUILD_DIR/control.tar.gz"
+    # Archives
+    local CONTROL_TAR="$BUILD_DIR/control_$FLAVOR.tar.gz"
+    local DATA_TAR="$BUILD_DIR/data_$FLAVOR.tar.gz"
     (cd "$CONTROL_DIR" && COPYFILE_DISABLE=1 tar -czf "$CONTROL_TAR" .)
+    
+    # Tar data payload (relative to staging root)
+    if [ "$FLAVOR" = "rootless" ]; then
+        (cd "$STAGING" && COPYFILE_DISABLE=1 tar -czf "$DATA_TAR" var)
+    else
+        (cd "$STAGING" && COPYFILE_DISABLE=1 tar -czf "$DATA_TAR" Applications)
+    fi
 
-    # data.tar.gz (everything in staging except DEBIAN)
-    DATA_TAR="$BUILD_DIR/data.tar.gz"
-    (cd "$STAGING" && COPYFILE_DISABLE=1 tar -czf "$DATA_TAR" var)
-
-    # Assemble debian archive: debian-binary, control.tar.gz, data.tar.gz
-    python3 - "$DEB_PATH" "$CONTROL_TAR" "$DATA_TAR" << 'PYEOF'
+    # Assemble debian archive
+    python3 - "$FLAVOR_DEB_PATH" "$CONTROL_TAR" "$DATA_TAR" << 'PYEOF'
 import sys, os
 
 deb_path, control_tar, data_tar = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -147,15 +147,12 @@ def ar_header(name, size):
 
 with open(deb_path, "wb") as deb:
     deb.write(b"!<arch>\n")
-    # 1. debian-binary
     deb.write(ar_header("debian-binary", 4) + b"2.0\n")
-    # 2. control.tar.gz
     with open(control_tar, "rb") as f:
         c_bytes = f.read()
     deb.write(ar_header("control.tar.gz", len(c_bytes)) + c_bytes)
     if len(c_bytes) % 2 != 0:
         deb.write(b"\n")
-    # 3. data.tar.gz
     with open(data_tar, "rb") as f:
         d_bytes = f.read()
     deb.write(ar_header("data.tar.gz", len(d_bytes)) + d_bytes)
@@ -163,30 +160,23 @@ with open(deb_path, "wb") as deb:
         deb.write(b"\n")
 PYEOF
 
-    rm -f "$CONTROL_TAR" "$DATA_TAR"
-fi
+    rm -rf "$STAGING" "$CONTROL_TAR" "$DATA_TAR"
+    local DEB_SIZE=$(du -sh "$FLAVOR_DEB_PATH" | awk '{print $1}')
+    echo "✅ Built $FLAVOR: $FLAVOR_DEB_PATH ($DEB_SIZE)"
 
-rm -rf "$STAGING"
-
-if [ ! -f "$DEB_PATH" ]; then
-    echo "❌ .deb packaging failed"
-    exit 1
-fi
-
-DEB_SIZE=$(du -sh "$DEB_PATH" | awk '{print $1}')
-echo "✅ Built: $DEB_PATH ($DEB_SIZE)"
-
-# ── 7. Optionally copy to repo docs/ ─────────────────────────────────────────
-if [ -n "$COPY_TO" ]; then
-    if [ ! -d "$COPY_TO" ]; then
-        echo "❌ --copy-to target not found: $COPY_TO"
-        exit 1
+    if [ -n "$COPY_TO" ]; then
+        cp "$FLAVOR_DEB_PATH" "$COPY_TO/"
+        echo "📂 Copied $FLAVOR_DEB_NAME → $COPY_TO/"
     fi
-    cp "$DEB_PATH" "$COPY_TO/"
-    echo "📂 Copied $DEB_NAME → $COPY_TO/"
-fi
+}
+
+# ── 5. Build Rootless & Rootful Flavors ───────────────────────────────────────
+pack_flavor "rootless" "iphoneos-arm64" "/var/jb/Applications"
+pack_flavor "rootful"  "iphoneos-arm"   "/Applications"
 
 echo ""
-echo "🎉 Done! $DEB_NAME"
-echo "   To push to repo: ./make_deb.sh --copy-to ../RemoteCompanion/docs"
-echo "   Then run:        cd ../RemoteCompanion && ./repo_utils/update_repo.sh"
+echo "🎉 Done! Both rootless and rootful packages built."
+echo "   Rootless: com.saihgupr.audiostream_${VERSION}_iphoneos-arm64.deb"
+echo "   Rootful:  com.saihgupr.audiostream_${VERSION}_iphoneos-arm.deb"
+echo "   Release files are ready in: $BUILD_DIR/"
+

@@ -105,9 +105,9 @@ Standard controls (shuffle, repeat, scrubbing, queue index) are fully supported 
 
 Add the RemoteCompanion Repo to your package manager of choice:
 
-- **Repository URL:** `https://saihgupr.github.io/remotecompanion/`
-- **[Add to Sileo](sileo://source/https://saihgupr.github.io/remotecompanion/)**
-- **[Add to Zebra](zbra://sources/add/https://saihgupr.github.io/remotecompanion/)**
+- **Repository URL:** `https://saihgupr.github.io/audiostream/`
+- **[Add to Sileo](sileo://source/https://saihgupr.github.io/audiostream/)**
+- **[Add to Zebra](zbra://sources/add/https://saihgupr.github.io/audiostream/)**
 
 Once added, search for **AudioStream** and tap Install.
 
