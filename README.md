@@ -78,6 +78,16 @@ audiostream stop
 # Check whether the server is running
 audiostream status
 ```
+---
+
+## iPad
+
+<p align="center">
+  <img src="images/IMG_0106.png" width="40%" alt="iPad" />
+  <img src="images/IMG_0107.png" width="40%" alt="iPad" />
+</p>
+
+---
 
 ---
 
