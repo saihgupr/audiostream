@@ -124,16 +124,19 @@ killall -9 AudioStream 2>/dev/null || true
 PRERM
     chmod 755 "$CONTROL_DIR/prerm"
 
+    # Strip all macOS extended attributes (com.apple.provenance, etc.)
+    xattr -cr "$STAGING"
+
     # Archives
     local CONTROL_TAR="$BUILD_DIR/control_$FLAVOR.tar.gz"
     local DATA_TAR="$BUILD_DIR/data_$FLAVOR.tar.gz"
-    (cd "$CONTROL_DIR" && COPYFILE_DISABLE=1 tar -czf "$CONTROL_TAR" .)
+    (cd "$CONTROL_DIR" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$CONTROL_TAR" .)
     
     # Tar data payload (relative to staging root)
     if [ "$FLAVOR" = "rootless" ]; then
-        (cd "$STAGING" && COPYFILE_DISABLE=1 tar -czf "$DATA_TAR" var)
+        (cd "$STAGING" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$DATA_TAR" var)
     else
-        (cd "$STAGING" && COPYFILE_DISABLE=1 tar -czf "$DATA_TAR" Applications)
+        (cd "$STAGING" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$DATA_TAR" Applications)
     fi
 
     # Assemble debian archive
