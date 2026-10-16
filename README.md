@@ -83,11 +83,9 @@ audiostream status
 ## iPad
 
 <p align="center">
-  <img src="images/IMG_0106.png" width="40%" alt="iPad" />
-  <img src="images/IMG_0107.png" width="40%" alt="iPad" />
+  <img src="images/ipad_1.png" width="35%" alt="iPad 1" />
+  <img src="images/ipad_2.png" width="%" alt="iPad 2" />
 </p>
-
----
 
 ---
 
