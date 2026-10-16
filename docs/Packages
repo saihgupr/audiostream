@@ -15,6 +15,21 @@ SHA256: dbb8d6cfe27e97470a2cbc241d82b8ccd822bbcfe798043d13e254fd9916f359
 
 Package: com.saihgupr.audiostream
 Name: AudioStream
+Version: 1.0.2
+Architecture: iphoneos-arm64
+Description: A self-hosted music server for jailbroken iOS. Stream your native iTunes library over HTTP or play locally, with hybrid local/remote playback, album art downloading, smart playlists, and Apple Watch controls. https://github.com/saihgupr/AudioStream
+Icon: https://saihgupr.github.io/audiostream/CydiaIcon.png
+Maintainer: Saihgupr
+Author: Saihgupr
+Section: Applications
+Filename: ./com.saihgupr.audiostream_1.0.2_iphoneos-arm64.deb
+Size: 4286912
+MD5sum: 0cb5ec9cbbec9fdc612ff944df1a6f75
+SHA1: d84694894321dec499bea7bc71db9cd75f11e2db
+SHA256: 5a4faf9ce9015f77e418377b98411817988d161e12449e893aa922abe169953d
+
+Package: com.saihgupr.audiostream
+Name: AudioStream
 Version: 1.0.1
 Architecture: iphoneos-arm
 Description: A self-hosted music server for jailbroken iOS. Stream your native iTunes library over HTTP or play locally, with hybrid local/remote playback, album art downloading, smart playlists, and Apple Watch controls. https://github.com/saihgupr/AudioStream
@@ -57,4 +72,19 @@ Size: 1772288
 MD5sum: 63420c003d628b2a0f4cb29446379ba6
 SHA1: a0092a6efa5eb377eec85b27ca6077ac61b4f855
 SHA256: a45820f148681465e00b7e06f3c6a8598195925b434980bf3fb4d5337a99d153
+
+Package: com.saihgupr.audiostream
+Name: AudioStream
+Version: 1.0.2
+Architecture: iphoneos-arm
+Description: A self-hosted music server for jailbroken iOS. Stream your native iTunes library over HTTP or play locally, with hybrid local/remote playback, album art downloading, smart playlists, and Apple Watch controls. https://github.com/saihgupr/AudioStream
+Icon: https://saihgupr.github.io/audiostream/CydiaIcon.png
+Maintainer: Saihgupr
+Author: Saihgupr
+Section: Applications
+Filename: ./com.saihgupr.audiostream_1.0.2_iphoneos-arm.deb
+Size: 4286798
+MD5sum: 4f978c6049bf184191a5bebaa420f6c3
+SHA1: 3240953427aac665fa64b741fc09cca1e84a62cc
+SHA256: b49a64312bfd48971bb72120c91e0e35c328824b84da5817f6d2641b0a9d64d1
 

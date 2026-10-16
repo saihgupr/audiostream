@@ -8,12 +8,12 @@ Components: main
 Architectures: iphoneos-arm iphoneos-arm64
 Description: AudioStream — A self-hosted music server for jailbroken iOS. Stream your iTunes library over HTTP or play locally.
 MD5Sum:
- d2c97e7e5dd9f6f2e702ca1dc172e39c 2844 Packages
- f2830507b251accd3f97c369ae5f2737 817 Packages.gz
- 3ae1401cbf1b013304b0bcc364bd6f2e 976 Packages.bz2
- e91587d6ea457d002e923ca78005f6e8 788 Packages.zst
+ 94b3e342d9fcb65844264bd9a5868c0a 4270 Packages
+ 7273e32595c16753877cbe0d424a41f5 1043 Packages.gz
+ ddb76d43789807e1e7e8dac1e8727d38 1239 Packages.bz2
+ 2ef453bbdfc914d1e183904c8c3cb611 981 Packages.zst
 SHA256:
- f52734641d15ab493209c70594ba4de7c30524be3158888df5c9ed9638600b85 2844 Packages
- 1afe353ed686782932c38f1ccdbd870ac500ac6669ad016ac09253a93aae3c7b 817 Packages.gz
- 269c369966f4a06906b3615c8778c814357961dbe0feadec3dba75bd249c30bf 976 Packages.bz2
- a629c023f00410941eca7ea20a155001e917bb3468631ada046a2a79511fbe8a 788 Packages.zst
+ 4fc825f9ee707052f24783a4a1d623963382e418126de2df8ee27a35ad6cf5fb 4270 Packages
+ 390b4984724e46e7616e4f2e496c382834cd74bcf5d9f0ac1a797369bf68e06b 1043 Packages.gz
+ b33146ff226b159e1c84453c586a6b89a79268fee9112e9f49b6481f6c2c79bf 1239 Packages.bz2
+ b1aefeb7f6ca6c6d13192a9fbeb952b4eaabd1006bec9649df4e9920b28a62ec 981 Packages.zst

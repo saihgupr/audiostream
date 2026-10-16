@@ -1,6 +1,6 @@
 Package: com.saihgupr.audiostream
 Name: AudioStream
-Version: 1.0.1
+Version: 1.0.2
 Architecture: iphoneos-arm64
 Description: A self-hosted music server for jailbroken iOS. Stream your native iTunes library over HTTP or play locally, with hybrid local/remote playback, album art downloading, smart playlists, and Apple Watch controls. https://github.com/saihgupr/AudioStream
 Icon: https://saihgupr.github.io/audiostream/CydiaIcon.png
