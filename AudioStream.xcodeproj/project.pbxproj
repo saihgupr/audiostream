@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -55,7 +55,7 @@
 		454C549E188B245A24CA4305 /* AudioStreamApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamApp.swift; sourceTree = "<group>"; };
 		495B4AF9B214A4582DD88ECD /* AlbumMergeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumMergeSheet.swift; sourceTree = "<group>"; };
 		4F9C36768DC1D3125AFCCD15 /* SkeletonAlbumCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkeletonAlbumCard.swift; sourceTree = "<group>"; };
-		5A2D2E0F41A440C7BF6D57A8 /* audiostream.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = audiostream.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A2D2E0F41A440C7BF6D57A8 /* AudioStream.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AudioStream.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5BD642ECE4A0DE7A00DAA193 /* ArtworkDownloadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkDownloadService.swift; sourceTree = "<group>"; };
 		6626C77E404CACF36B9AB455 /* ArtistMergeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistMergeService.swift; sourceTree = "<group>"; };
 		662ABF40F309031137CABBDB /* MergeManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeManagementView.swift; sourceTree = "<group>"; };
@@ -174,7 +174,7 @@
 		A0AC0D0A6F1A426DE8226D41 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				5A2D2E0F41A440C7BF6D57A8 /* audiostream.app */,
+				5A2D2E0F41A440C7BF6D57A8 /* AudioStream.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -215,7 +215,7 @@
 			packageProductDependencies = (
 			);
 			productName = audiostream;
-			productReference = 5A2D2E0F41A440C7BF6D57A8 /* audiostream.app */;
+			productReference = 5A2D2E0F41A440C7BF6D57A8 /* AudioStream.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -243,7 +243,6 @@
 			);
 			mainGroup = 15430EABE0BEC74E29568BF7;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -316,7 +315,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = App/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -375,7 +374,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -437,7 +436,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -461,7 +460,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = App/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
