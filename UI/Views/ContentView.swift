@@ -6,6 +6,7 @@ struct ContentView: View {
     
     // Navigation State
     @StateObject private var navManager = NavigationManager()
+    @StateObject private var quickActionManager = QuickActionManager.shared
     @State private var libraryStackId = UUID()
     @State private var searchStackId = UUID()
     @State private var settingsStackId = UUID()
@@ -98,5 +99,16 @@ struct ContentView: View {
             }
         }
         .environmentObject(navManager)
+        .onAppear {
+            handlePendingQuickAction()
+        }
+        .onReceive(quickActionManager.$pendingAction) { _ in
+            handlePendingQuickAction()
+        }
+    }
+    
+    private func handlePendingQuickAction() {
+        guard let action = quickActionManager.consumePendingAction() else { return }
+        audioService.performQuickAction(action)
     }
 }

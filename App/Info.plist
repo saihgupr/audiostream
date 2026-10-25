@@ -24,6 +24,41 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.saihgupr.audiostream.quickaction.shuffleall</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Shuffle All Songs</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeShuffle</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.saihgupr.audiostream.quickaction.recentlyadded</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Recently Added Playlist</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeTime</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.saihgupr.audiostream.quickaction.queuealbum</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Queue Album</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeAudio</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.saihgupr.audiostream.quickaction.queueartist</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Queue Artist</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeBookmark</string>
+		</dict>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UILaunchStoryboardName</key>

@@ -601,6 +601,21 @@ class AudioPlayerService: ObservableObject {
         updateNowPlayingInfo()
     }
     
+    // MARK: - Home Screen Quick Actions
+    
+    func performQuickAction(_ action: QuickAction) {
+        switch action {
+        case .shuffleAll:
+            handleShuffleAllCommand()
+        case .recentlyAdded:
+            handlePlayPlaylistCommand(name: "Recently Added", shuffle: false)
+        case .queueAlbum:
+            handleQueueAlbumCommand()
+        case .queueArtist:
+            handleQueueArtistCommand()
+        }
+    }
+    
     // MARK: - Remote Control (Darwin Notifications)
     
     private var commandCancellables = Set<AnyCancellable>()
@@ -873,7 +888,7 @@ class AudioPlayerService: ObservableObject {
             .store(in: &commandCancellables)
     }
     
-    private func handlePlayPlaylistCommand(name: String? = nil) {
+    private func handlePlayPlaylistCommand(name: String? = nil, shuffle: Bool = true) {
         let pendingPlaylistPath = "/tmp/audiostream_pending_playlist"
         let pendingCmdPath = "/tmp/audiostream_pending_cmd"
         
@@ -920,7 +935,7 @@ class AudioPlayerService: ObservableObject {
                 return
             }
             
-            let tracksToPlay: [Track]
+            var tracksToPlay: [Track]
             if !targetPlaylist.tracks.isEmpty {
                 tracksToPlay = targetPlaylist.tracks
             } else {
@@ -934,11 +949,11 @@ class AudioPlayerService: ObservableObject {
                 return
             }
             
-            let shuffledTracks = tracksToPlay.shuffled()
-            print("[AudioReceiver] playplaylist: playing \(shuffledTracks.count) shuffled tracks for '\(targetPlaylist.name)'")
+            tracksToPlay = shuffle ? tracksToPlay.shuffled() : tracksToPlay
+            print("[AudioReceiver] playplaylist: playing \(tracksToPlay.count) tracks for '\(targetPlaylist.name)' (shuffle: \(shuffle))")
             
-            self.state.isShuffleEnabled = true
-            self.play(tracks: shuffledTracks, startingAt: 0)
+            self.state.isShuffleEnabled = shuffle
+            self.play(tracks: tracksToPlay, startingAt: 0)
         }
         .store(in: &commandCancellables)
     }
