@@ -39,6 +39,27 @@ final class QuickActionManager: ObservableObject {
     }
 }
 
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        if let shortcutItem = connectionOptions.shortcutItem {
+            QuickActionManager.shared.handle(shortcutItem)
+        }
+    }
+
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        QuickActionManager.shared.handle(shortcutItem)
+        completionHandler(true)
+    }
+}
+
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
@@ -48,6 +69,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             QuickActionManager.shared.handle(shortcutItem)
         }
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        if let shortcutItem = options.shortcutItem {
+            QuickActionManager.shared.handle(shortcutItem)
+        }
+
+        let configuration = UISceneConfiguration(
+            name: "Default Configuration",
+            sessionRole: connectingSceneSession.role
+        )
+        configuration.delegateClass = SceneDelegate.self
+        return configuration
     }
 
     func application(
