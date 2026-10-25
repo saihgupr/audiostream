@@ -608,7 +608,7 @@ class AudioPlayerService: ObservableObject {
         case .shuffleAll:
             handleShuffleAllCommand()
         case .recentlyAdded:
-            handlePlayPlaylistCommand(name: "Recently Added", shuffle: false)
+            handlePlayPlaylistCommand(name: "Recently Added", shuffle: true)
         case .queueAlbum:
             handleQueueAlbumCommand()
         case .queueArtist:
