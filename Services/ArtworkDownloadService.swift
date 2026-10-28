@@ -266,10 +266,25 @@ class ArtworkDownloadService {
                 }
             }
         }
-        
+
+        // Notify the daemon so a newly saved cover.jpg is picked up on
+        // rescan. Best-effort fire-and-forget: silently ignored when no
+        // server is configured or reachable (local-only use).
+        if localCoverUrl != nil {
+            notifyDaemonRescan()
+        }
+
         return localCoverUrl ?? persistentFileUrl
     }
     
+    private func notifyDaemonRescan() {
+        guard let url = URL(string: "http://127.0.0.1:18080/api/refresh") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 3
+        URLSession.shared.dataTask(with: req).resume()
+    }
+
     private func populateCaches(image: UIImage, finalUrl: URL, album: Album) {
         // 1. Update LocalFileArtworkCache for album ID and all tracks
         LocalFileArtworkCache.shared.set(image, for: album.id)

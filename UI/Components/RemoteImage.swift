@@ -140,6 +140,13 @@ class ImageLoader: ObservableObject {
                     DispatchQueue.main.async {
                         self?.image = img
                     }
+                } else {
+                    // Evict poisoned entry (e.g. a previously cached HTTP error
+                    // body) so a later retry can fetch from the network.
+                    try? FileManager.default.removeItem(at: diskURL)
+                    DispatchQueue.main.async {
+                        self?.image = nil
+                    }
                 }
             }
             return
@@ -178,18 +185,30 @@ class ImageLoader: ObservableObject {
             return
         }
         
-        // Download if not found in disk cache
+        // Download if not found in disk cache. Only 2xx responses with
+        // non-empty bodies are cached; HTTP errors (e.g. 404) map to nil
+        // WITHOUT caching so a later retry can succeed.
         cancellable = URLSession.shared.dataTaskPublisher(for: url)
-            .handleEvents(receiveOutput: { output in
-                if let downscaled = Self.downscaledThumbnail(from: output.data, maxPixelSize: 350),
+            .tryMap { output -> Data in
+                if let http = output.response as? HTTPURLResponse,
+                   !(200...299).contains(http.statusCode) {
+                    throw URLError(.badServerResponse)
+                }
+                guard !output.data.isEmpty else {
+                    throw URLError(.zeroByteResource)
+                }
+                return output.data
+            }
+            .handleEvents(receiveOutput: { data in
+                if let downscaled = Self.downscaledThumbnail(from: data, maxPixelSize: 350),
                    let jpegData = downscaled.jpegData(compressionQuality: 0.8) {
                     try? jpegData.write(to: diskURL)
                 } else {
-                    try? output.data.write(to: diskURL)
+                    try? data.write(to: diskURL)
                 }
             })
-            .map { output -> UIImage? in
-                Self.downscaledThumbnail(from: output.data, maxPixelSize: 350) ?? UIImage(data: output.data)
+            .map { data -> UIImage? in
+                Self.downscaledThumbnail(from: data, maxPixelSize: 350) ?? UIImage(data: data)
             }
             .replaceError(with: nil)
             .receive(on: DispatchQueue.main)

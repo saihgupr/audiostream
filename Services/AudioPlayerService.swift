@@ -1231,9 +1231,12 @@ class AudioPlayerService: ObservableObject {
             }
         }
         
-        artworkTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        artworkTask = URLSession.shared.dataTask(with: url) { [weak self] data, response, _ in
             guard let self = self,
+                  let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
                   let data = data,
+                  !data.isEmpty,
                   let image = UIImage(data: data) else { return }
             
             // Save to disk cache

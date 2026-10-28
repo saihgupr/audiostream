@@ -214,6 +214,7 @@ class AudioStreamerDaemon {
             rescanHandler: { [weak self] _ in
                 guard let self = self else { return }
                 serverLog("Triggered fast rescan")
+                self.httpServer?.invalidateArtworkCache()
                 self.loadSongs(forceRefresh: false)
             }
         )

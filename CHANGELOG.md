@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **In-Place Album Merging**: Streamlined album merge mode with selection badges, primary target labels, and direct merge action without leaving the main library grid.
 
 ### Fixed
+- **Downloaded Covers Now Reach Remote Clients**: Fixed three compounding caches that hid freshly downloaded `cover.jpg` files from remote clients. The daemon revalidates its negative artwork cache with a folder probe instead of 404ing forever, clears all artwork caches on rescan, and honors `?refresh=1` on `/artwork/<id>`; clients no longer cache HTTP error bodies as artwork (retry can succeed), evict undecodable disk entries, and notify the daemon after each download.
 - **Dead Home Screen Quick Actions Replaced with Random Album**: `Queue Album` and `Queue Artist` shortcuts silently did nothing on cold launch (both require a current track). Replaced them with a single `Random Album` shortcut that picks a random album from the library and starts playback from the first track.
 - **Missing Artwork on Imported Albums**: Fixed placeholder/grey background on imported songs that lacked embedded artwork tags by enabling on-demand artwork downloading and caching.
 - **Local File Metadata Resolution**: Improved track number extraction and fallback artwork resolution from `cover.jpg` / `folder.jpg` in local folders.

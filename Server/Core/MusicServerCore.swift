@@ -127,6 +127,26 @@ public class SimpleHTTPServer {
         self.rescanHandler = rescanHandler
         self.artworkCache.countLimit = 300
     }
+
+    /// Clears cached artwork. With no id, evicts everything (positive
+    /// caches plus the negative no-artwork set); with an id, evicts just
+    /// that song. Called on rescan and on per-artwork ?refresh=1.
+    public func invalidateArtworkCache(id: UInt64? = nil) {
+        if let id = id {
+            let key = NSNumber(value: id)
+            artworkCache.removeObject(forKey: key)
+            artworkMimeCache.removeObject(forKey: key)
+            noArtworkLock.lock()
+            noArtworkIds.remove(id)
+            noArtworkLock.unlock()
+        } else {
+            artworkCache.removeAllObjects()
+            artworkMimeCache.removeAllObjects()
+            noArtworkLock.lock()
+            noArtworkIds.removeAll()
+            noArtworkLock.unlock()
+        }
+    }
     
     public func start() {
         signal(SIGPIPE, SIG_IGN)
@@ -302,6 +322,9 @@ public class SimpleHTTPServer {
         case _ where path.hasPrefix("/artwork/"):
             let idStr = String(path.dropFirst(9))
             if let id = UInt64(idStr) {
+                if isForceRefresh {
+                    invalidateArtworkCache(id: id)
+                }
                 sendArtwork(persistentId: id, clientSocket: clientSocket)
             } else {
                 send404(clientSocket: clientSocket)
@@ -541,17 +564,84 @@ public class SimpleHTTPServer {
         }
     }
     
+    private static let folderArtworkNames = ["folder.jpg", "cover.jpg", "folder.png", "cover.png", "artwork.jpg", "artwork.png", "Cover.jpg", "Folder.jpg", "Cover.png", "Folder.png", "cover.jpeg", "folder.jpeg"]
+
+    /// Resolves the on-disk audio file for a song id via the path map,
+    /// falling back to the song list + base paths. Returns nil if unknown.
+    private func resolveSongFilePath(persistentId: UInt64) -> String? {
+        let pathMap = songFilePathsProvider()
+        let fileManager = FileManager.default
+
+        if let path = pathMap[persistentId] {
+            if path.hasPrefix("/") && fileManager.fileExists(atPath: path) {
+                return path
+            }
+            for basePath in musicBasePaths {
+                let fullPath = "\(basePath)/\(path)"
+                if fileManager.fileExists(atPath: fullPath) {
+                    return fullPath
+                }
+            }
+        }
+
+        let songs = songsProvider()
+        if let song = songs.first(where: { $0.persistentId == persistentId }) {
+            if song.filename.hasPrefix("/") && fileManager.fileExists(atPath: song.filename) {
+                return song.filename
+            }
+            for basePath in musicBasePaths {
+                let fullPath = "\(basePath)/\(song.filename)"
+                if fileManager.fileExists(atPath: fullPath) {
+                    return fullPath
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Cheap folder-image probe: same candidate names + up-to-3-level dir
+    /// walk as the sendArtwork fallback. No AVAsset parsing, safe to call
+    /// on every negative-cache hit.
+    private func folderImageData(forFilePath path: String) -> (Data, String)? {
+        let fileManager = FileManager.default
+        var dirURL = URL(fileURLWithPath: path).deletingLastPathComponent()
+        for _ in 0..<3 {
+            for name in Self.folderArtworkNames {
+                let imgPath = dirURL.appendingPathComponent(name).path
+                if fileManager.fileExists(atPath: imgPath),
+                   let data = try? Data(contentsOf: URL(fileURLWithPath: imgPath)),
+                   !data.isEmpty {
+                    let mime = name.lowercased().hasSuffix(".png") ? "image/png" : "image/jpeg"
+                    return (data, mime)
+                }
+            }
+            let parent = dirURL.deletingLastPathComponent()
+            if parent == dirURL || parent.path == "/var/mobile/Documents" { break }
+            dirURL = parent
+        }
+        return nil
+    }
+
     private func sendArtwork(persistentId: UInt64, clientSocket: Int32) {
         let key = NSNumber(value: persistentId)
         
-        // 0. Fast cache checks
+        // 0. Fast cache checks. The negative set is revalidated with a cheap
+        // folder-image probe so a cover.jpg added after a 404 is picked up
+        // instead of 404ing forever.
         noArtworkLock.lock()
-        if noArtworkIds.contains(persistentId) {
-            noArtworkLock.unlock()
-            send404(clientSocket: clientSocket)
-            return
-        }
+        let wasNegative = noArtworkIds.contains(persistentId)
         noArtworkLock.unlock()
+        if wasNegative {
+            if let probePath = resolveSongFilePath(persistentId: persistentId),
+               folderImageData(forFilePath: probePath) != nil {
+                noArtworkLock.lock()
+                noArtworkIds.remove(persistentId)
+                noArtworkLock.unlock()
+            } else {
+                send404(clientSocket: clientSocket)
+                return
+            }
+        }
         
         if let cachedData = artworkCache.object(forKey: key) as Data?,
            let cachedMime = artworkMimeCache.object(forKey: key) as String? {
@@ -559,42 +649,7 @@ public class SimpleHTTPServer {
             return
         }
         
-        var filePath: String? = nil
-        let pathMap = songFilePathsProvider()
-        let fileManager = FileManager.default
-        
-        if let path = pathMap[persistentId] {
-            if path.hasPrefix("/") && fileManager.fileExists(atPath: path) {
-                filePath = path
-            } else {
-                for basePath in musicBasePaths {
-                    let fullPath = "\(basePath)/\(path)"
-                    if fileManager.fileExists(atPath: fullPath) {
-                        filePath = fullPath
-                        break
-                    }
-                }
-            }
-        }
-        
-        if filePath == nil {
-            let songs = songsProvider()
-            if let song = songs.first(where: { $0.persistentId == persistentId }) {
-                if song.filename.hasPrefix("/") && fileManager.fileExists(atPath: song.filename) {
-                    filePath = song.filename
-                } else {
-                    for basePath in musicBasePaths {
-                        let fullPath = "\(basePath)/\(song.filename)"
-                        if fileManager.fileExists(atPath: fullPath) {
-                            filePath = fullPath
-                            break
-                        }
-                    }
-                }
-            }
-        }
-        
-        guard let path = filePath else {
+        guard let path = resolveSongFilePath(persistentId: persistentId) else {
             noArtworkLock.lock()
             noArtworkIds.insert(persistentId)
             noArtworkLock.unlock()
@@ -633,23 +688,11 @@ public class SimpleHTTPServer {
         }
         
         // 2. Folder image fallback
-        let candidateNames = ["folder.jpg", "cover.jpg", "folder.png", "cover.png", "artwork.jpg", "artwork.png", "Cover.jpg", "Folder.jpg", "Cover.png", "Folder.png", "cover.jpeg", "folder.jpeg"]
-        
-        var dirURL = URL(fileURLWithPath: path).deletingLastPathComponent()
-        for _ in 0..<3 {
-            for name in candidateNames {
-                let imgPath = dirURL.appendingPathComponent(name).path
-                if fileManager.fileExists(atPath: imgPath), let data = try? Data(contentsOf: URL(fileURLWithPath: imgPath)), !data.isEmpty {
-                    let mime = name.lowercased().hasSuffix(".png") ? "image/png" : "image/jpeg"
-                    artworkCache.setObject(data as NSData, forKey: key)
-                    artworkMimeCache.setObject(mime as NSString, forKey: key)
-                    sendImage(data: data, mimeType: mime, clientSocket: clientSocket)
-                    return
-                }
-            }
-            let parent = dirURL.deletingLastPathComponent()
-            if parent == dirURL || parent.path == "/var/mobile/Documents" { break }
-            dirURL = parent
+        if let (data, mime) = folderImageData(forFilePath: path) {
+            artworkCache.setObject(data as NSData, forKey: key)
+            artworkMimeCache.setObject(mime as NSString, forKey: key)
+            sendImage(data: data, mimeType: mime, clientSocket: clientSocket)
+            return
         }
         
         noArtworkLock.lock()
