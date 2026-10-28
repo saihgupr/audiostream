@@ -609,10 +609,8 @@ class AudioPlayerService: ObservableObject {
             handleShuffleAllCommand()
         case .recentlyAdded:
             handlePlayPlaylistCommand(name: "Recently Added", shuffle: true)
-        case .queueAlbum:
-            handleQueueAlbumCommand()
-        case .queueArtist:
-            handleQueueArtistCommand()
+        case .randomAlbum:
+            handleRandomAlbumCommand()
         }
     }
     
@@ -886,6 +884,58 @@ class AudioPlayerService: ObservableObject {
                 }
             )
             .store(in: &commandCancellables)
+    }
+    
+    private func handleRandomAlbumCommand() {
+        deletePendingCommandFile()
+        print("[AudioReceiver] randomalbum: playing a random album")
+        
+        let connectionService = ServerConnectionService()
+        let service = MusicLibraryService(connectionService: connectionService)
+        
+        Publishers.CombineLatest(
+            service.fetchAlbums().catch { _ in Just([]) },
+            service.fetchAllTracks().catch { _ in Just([]) }
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] loadedAlbums, loadedTracks in
+            guard let self = self else { return }
+            guard !loadedAlbums.isEmpty else {
+                print("[AudioReceiver] randomalbum: no albums found")
+                return
+            }
+            
+            let albumsWithTracks: [(album: Album, tracks: [Track])] = loadedAlbums.compactMap { album in
+                var resolved: [Track]
+                if !album.tracks.isEmpty {
+                    resolved = album.tracks.compactMap { albumTrack in
+                        loadedTracks.first(where: { $0.persistentId == albumTrack.persistentId })
+                            ?? loadedTracks.first(where: { $0.id == albumTrack.id })
+                    }
+                    if resolved.isEmpty {
+                        resolved = album.tracks
+                    }
+                } else {
+                    resolved = loadedTracks.filter {
+                        $0.album.localizedCaseInsensitiveCompare(album.title) == .orderedSame
+                    }
+                }
+                guard !resolved.isEmpty else { return nil }
+                return (album, resolved)
+            }
+            
+            guard let pick = albumsWithTracks.randomElement() else {
+                print("[AudioReceiver] randomalbum: no albums with playable tracks found")
+                return
+            }
+            
+            let sortedTracks = pick.tracks.sorted(by: Track.compareTrackOrder)
+            print("[AudioReceiver] randomalbum: playing \(sortedTracks.count) tracks for album '\(pick.album.title)'")
+            
+            self.state.isShuffleEnabled = false
+            self.play(tracks: sortedTracks, startingAt: 0)
+        }
+        .store(in: &commandCancellables)
     }
     
     private func handlePlayPlaylistCommand(name: String? = nil, shuffle: Bool = true) {

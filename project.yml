@@ -48,9 +48,6 @@ targets:
           - UIApplicationShortcutItemType: com.saihgupr.audiostream.quickaction.recentlyadded
             UIApplicationShortcutItemTitle: Recently Added Playlist
             UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeTime
-          - UIApplicationShortcutItemType: com.saihgupr.audiostream.quickaction.queuealbum
-            UIApplicationShortcutItemTitle: Queue Album
+          - UIApplicationShortcutItemType: com.saihgupr.audiostream.quickaction.randomalbum
+            UIApplicationShortcutItemTitle: Random Album
             UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeAudio
-          - UIApplicationShortcutItemType: com.saihgupr.audiostream.quickaction.queueartist
-            UIApplicationShortcutItemTitle: Queue Artist
-            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeBookmark

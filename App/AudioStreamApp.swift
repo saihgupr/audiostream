@@ -5,8 +5,7 @@ import Combine
 enum QuickAction: String {
     case shuffleAll = "com.saihgupr.audiostream.quickaction.shuffleall"
     case recentlyAdded = "com.saihgupr.audiostream.quickaction.recentlyadded"
-    case queueAlbum = "com.saihgupr.audiostream.quickaction.queuealbum"
-    case queueArtist = "com.saihgupr.audiostream.quickaction.queueartist"
+    case randomAlbum = "com.saihgupr.audiostream.quickaction.randomalbum"
 }
 
 final class QuickActionManager: ObservableObject {
