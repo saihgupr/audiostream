@@ -33,9 +33,18 @@ class ImageLoader: ObservableObject {
         return cachePath
     }
     
+    private static func stableFilename(for string: String) -> String {
+        // FNV-1a 64-bit over UTF-8 bytes: stable across launches (unlike String.hashValue).
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in string.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
+    }
+
     private static func diskCacheURL(for url: URL) -> URL {
-        let filename = abs(url.absoluteString.hashValue).description
-        return cacheDirectory.appendingPathComponent(filename)
+        return cacheDirectory.appendingPathComponent(stableFilename(for: url.absoluteString))
     }
     
     private static func downscaledThumbnail(from data: Data, maxPixelSize: CGFloat = 350) -> UIImage? {

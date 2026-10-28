@@ -73,10 +73,13 @@ struct PlaylistArtworkView: View {
             albumTrackMap[key, default: []].append(track)
         }
         
-        // For each album key, find an artwork URL from its tracks
+        // For each album key, find an artwork URL from its tracks.
+        // Sort each group with Track.compareTrackOrder first so the tile pick
+        // matches the album grid's deterministic pick (MusicLibraryService.fetchAlbums).
         var albumArtworkMap: [String: URL] = [:]
         for (key, albumTracks) in albumTrackMap {
-            if let url = albumTracks.compactMap({ $0.artworkUrl }).first {
+            let ordered = albumTracks.sorted(by: Track.compareTrackOrder)
+            if let url = ordered.compactMap({ $0.artworkUrl }).first {
                 albumArtworkMap[key] = url
             }
         }
