@@ -5,6 +5,7 @@ import MediaPlayer
 class ImageLoader: ObservableObject {
     @Published var image: UIImage?
     private var cancellable: AnyCancellable?
+    private var currentURL: URL?
     
     // Memory cache to prevent redundant fetches and enable 60fps smooth scrolling
     private static let cache: NSCache<NSString, UIImage> = {
@@ -66,11 +67,15 @@ class ImageLoader: ObservableObject {
     }
     
     func load(url: URL) {
+        currentURL = url
+        let requestedURL = url
         let key = url.absoluteString
         let nsKey = key as NSString
         
         // Fast path: synchronous memory cache hit
         if let cachedImage = Self.cache.object(forKey: nsKey) {
+            cancellable?.cancel()
+            cancellable = nil
             self.image = cachedImage
             return
         }
@@ -97,10 +102,12 @@ class ImageLoader: ObservableObject {
                 if let img = LocalFileArtworkCache.shared.get(for: hostKey, maxPixelSize: 350) {
                     Self.setCachedImage(img, for: key)
                     DispatchQueue.main.async {
+                        guard self.currentURL == requestedURL else { return }
                         self.image = img
                     }
                 } else {
-                    DispatchQueue.main.async {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentURL == requestedURL, self.image == nil else { return }
                         self.image = nil
                     }
                 }
@@ -116,10 +123,12 @@ class ImageLoader: ObservableObject {
                 if let img = Self.downscaledThumbnail(fromURL: url, maxPixelSize: 350) {
                     Self.setCachedImage(img, for: key)
                     DispatchQueue.main.async {
+                        guard self.currentURL == requestedURL else { return }
                         self.image = img
                     }
                 } else {
-                    DispatchQueue.main.async {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentURL == requestedURL, self.image == nil else { return }
                         self.image = nil
                     }
                 }
@@ -137,15 +146,17 @@ class ImageLoader: ObservableObject {
                 if let data = try? Data(contentsOf: diskURL),
                    let img = Self.downscaledThumbnail(from: data, maxPixelSize: 350) ?? UIImage(data: data) {
                     Self.setCachedImage(img, for: key)
-                    DispatchQueue.main.async {
-                        self?.image = img
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentURL == requestedURL else { return }
+                        self.image = img
                     }
                 } else {
                     // Evict poisoned entry (e.g. a previously cached HTTP error
                     // body) so a later retry can fetch from the network.
                     try? FileManager.default.removeItem(at: diskURL)
-                    DispatchQueue.main.async {
-                        self?.image = nil
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentURL == requestedURL, self.image == nil else { return }
+                        self.image = nil
                     }
                 }
             }
@@ -173,12 +184,14 @@ class ImageLoader: ObservableObject {
                         downscaledImage = artworkImage
                     }
                     Self.setCachedImage(downscaledImage, for: key)
-                    DispatchQueue.main.async {
-                        self?.image = downscaledImage
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentURL == requestedURL else { return }
+                        self.image = downscaledImage
                     }
                 } else {
-                    DispatchQueue.main.async {
-                        self?.image = nil
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentURL == requestedURL, self.image == nil else { return }
+                        self.image = nil
                     }
                 }
             }
@@ -188,6 +201,8 @@ class ImageLoader: ObservableObject {
         // Download if not found in disk cache. Only 2xx responses with
         // non-empty bodies are cached; HTTP errors (e.g. 404) map to nil
         // WITHOUT caching so a later retry can succeed.
+        // Failure/cancellation NEVER writes nil over an existing good image,
+        // and stale completions (cell reuse) are ignored via currentURL guard.
         cancellable = URLSession.shared.dataTaskPublisher(for: url)
             .tryMap { output -> Data in
                 if let http = output.response as? HTTPURLResponse,
@@ -210,14 +225,16 @@ class ImageLoader: ObservableObject {
             .map { data -> UIImage? in
                 Self.downscaledThumbnail(from: data, maxPixelSize: 350) ?? UIImage(data: data)
             }
-            .replaceError(with: nil)
             .receive(on: DispatchQueue.main)
-            .handleEvents(receiveOutput: { img in
-                if let img = img {
-                    Self.setCachedImage(img, for: key)
-                }
+            .sink(receiveCompletion: { _ in
+                // Intentionally ignore failures AND cancellation:
+                // never nil-out a good image on transient errors.
+            }, receiveValue: { [weak self] img in
+                guard let self = self, self.currentURL == requestedURL else { return }
+                guard let img = img else { return }
+                Self.setCachedImage(img, for: key)
+                self.image = img
             })
-            .assign(to: \.image, on: self)
     }
     
     deinit {

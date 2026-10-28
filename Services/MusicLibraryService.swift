@@ -84,7 +84,7 @@ class RemoteLibraryDiskCache {
                 return t
             }
             let artUrl = baseURL.flatMap { bURL in
-                album.tracks.first.map { bURL.appendingPathComponent("/artwork/\($0.persistentId)") }
+                album.tracks.sorted(by: Track.compareTrackOrder).first.map { bURL.appendingPathComponent("/artwork/\($0.persistentId)") }
             } ?? album.artworkUrl
             
             return Album(
@@ -148,9 +148,12 @@ class MusicLibraryService: ObservableObject {
                 let grouped = Dictionary(grouping: tracks) { $0.album }
                 
                 let rawAlbums = grouped.map { (albumName, albumTracks) -> Album in
-                    let artist = albumTracks.first?.artist ?? "Unknown Artist"
+                    // Deterministic artwork pick: sort before picking first so
+                    // repeated fetches (server JSON order varies) yield same id.
+                    let orderedForArtwork = albumTracks.sorted(by: Track.compareTrackOrder)
+                    let artist = orderedForArtwork.first?.artist ?? "Unknown Artist"
                     // Use the persistentId of the first track for album artwork
-                    let firstTrack = albumTracks.first
+                    let firstTrack = orderedForArtwork.first
                     let artworkUrl = firstTrack.map { 
                         baseURL.appendingPathComponent("/artwork/\($0.persistentId)") 
                     }
