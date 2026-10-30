@@ -856,9 +856,9 @@ class AudioPlayerService: ObservableObject {
             .store(in: &commandCancellables)
     }
     
-    private func handleShuffleAllCommand() {
+    private func handleShuffleAllCommand(attempt: Int = 0) {
         deletePendingCommandFile()
-        print("[AudioReceiver] shuffleall: shuffling all songs")
+        print("[AudioReceiver] shuffleall: shuffling all songs (attempt \(attempt))")
         
         let connectionService = ServerConnectionService()
         let service = MusicLibraryService(connectionService: connectionService)
@@ -866,15 +866,25 @@ class AudioPlayerService: ObservableObject {
         service.fetchAllTracks()
             .receive(on: DispatchQueue.main)
             .sink(
-                receiveCompletion: { completion in
+                receiveCompletion: { [weak self] completion in
                     if case .failure(let err) = completion {
-                        print("[AudioReceiver] shuffleall: failed to fetch tracks: \(err)")
+                        print("[AudioReceiver] shuffleall: failed to fetch tracks: \(err) (attempt \(attempt))")
+                        // Cold launch via Home Screen quick action races library/
+                        // server warmup — retry with delay so the second tap isn't needed.
+                        guard attempt < 3 else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                            self?.handleShuffleAllCommand(attempt: attempt + 1)
+                        }
                     }
                 },
                 receiveValue: { [weak self] allTracks in
                     guard let self = self else { return }
                     guard !allTracks.isEmpty else {
-                        print("[AudioReceiver] shuffleall: no tracks found")
+                        print("[AudioReceiver] shuffleall: no tracks found (attempt \(attempt))")
+                        guard attempt < 3 else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                            self?.handleShuffleAllCommand(attempt: attempt + 1)
+                        }
                         return
                     }
                     
@@ -886,9 +896,9 @@ class AudioPlayerService: ObservableObject {
             .store(in: &commandCancellables)
     }
     
-    private func handleRandomAlbumCommand() {
+    private func handleRandomAlbumCommand(attempt: Int = 0) {
         deletePendingCommandFile()
-        print("[AudioReceiver] randomalbum: playing a random album")
+        print("[AudioReceiver] randomalbum: playing a random album (attempt \(attempt))")
         
         let connectionService = ServerConnectionService()
         let service = MusicLibraryService(connectionService: connectionService)
@@ -901,7 +911,11 @@ class AudioPlayerService: ObservableObject {
         .sink { [weak self] loadedAlbums, loadedTracks in
             guard let self = self else { return }
             guard !loadedAlbums.isEmpty else {
-                print("[AudioReceiver] randomalbum: no albums found")
+                print("[AudioReceiver] randomalbum: no albums found (attempt \(attempt))")
+                guard attempt < 3 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    self?.handleRandomAlbumCommand(attempt: attempt + 1)
+                }
                 return
             }
             
@@ -925,7 +939,11 @@ class AudioPlayerService: ObservableObject {
             }
             
             guard let pick = albumsWithTracks.randomElement() else {
-                print("[AudioReceiver] randomalbum: no albums with playable tracks found")
+                print("[AudioReceiver] randomalbum: no albums with playable tracks found (attempt \(attempt))")
+                guard attempt < 3 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    self?.handleRandomAlbumCommand(attempt: attempt + 1)
+                }
                 return
             }
             
@@ -938,7 +956,7 @@ class AudioPlayerService: ObservableObject {
         .store(in: &commandCancellables)
     }
     
-    private func handlePlayPlaylistCommand(name: String? = nil, shuffle: Bool = true) {
+    private func handlePlayPlaylistCommand(name: String? = nil, shuffle: Bool = true, attempt: Int = 0) {
         let pendingPlaylistPath = "/tmp/audiostream_pending_playlist"
         let pendingCmdPath = "/tmp/audiostream_pending_cmd"
         
@@ -960,11 +978,14 @@ class AudioPlayerService: ObservableObject {
         }
         playlistName = playlistName.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
         
-        print("[AudioReceiver] playplaylist: searching for playlist '\(playlistName)'")
+        print("[AudioReceiver] playplaylist: searching for playlist '\(playlistName)' (attempt \(attempt))")
         
         let connectionService = ServerConnectionService()
         let service = MusicLibraryService(connectionService: connectionService)
         let source = connectionService.librarySource
+        let playlistNameCopy = playlistName
+        let shuffleCopy = shuffle
+        let attemptCopy = attempt
         
         Publishers.CombineLatest3(
             service.fetchAlbums().catch { _ in Just([]) },
@@ -977,11 +998,15 @@ class AudioPlayerService: ObservableObject {
             
             let allPlaylists = self.buildAllPlaylists(albums: loadedAlbums, userPlaylists: loadedPlaylists, tracks: loadedTracks, source: source)
             
-            let matchedPlaylist = allPlaylists.first { $0.name.localizedCaseInsensitiveCompare(playlistName) == .orderedSame }
-                ?? allPlaylists.first { $0.name.localizedCaseInsensitiveContains(playlistName) }
+            let matchedPlaylist = allPlaylists.first { $0.name.localizedCaseInsensitiveCompare(playlistNameCopy) == .orderedSame }
+                ?? allPlaylists.first { $0.name.localizedCaseInsensitiveContains(playlistNameCopy) }
             
             guard let targetPlaylist = matchedPlaylist else {
-                print("[AudioReceiver] playplaylist: playlist '\(playlistName)' not found")
+                print("[AudioReceiver] playplaylist: playlist '\(playlistNameCopy)' not found (attempt \(attemptCopy))")
+                guard attemptCopy < 3 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    self?.handlePlayPlaylistCommand(name: playlistNameCopy, shuffle: shuffleCopy, attempt: attemptCopy + 1)
+                }
                 return
             }
             
@@ -995,14 +1020,18 @@ class AudioPlayerService: ObservableObject {
             }
             
             guard !tracksToPlay.isEmpty else {
-                print("[AudioReceiver] playplaylist: playlist '\(targetPlaylist.name)' contains 0 playable tracks")
+                print("[AudioReceiver] playplaylist: playlist '\(targetPlaylist.name)' contains 0 playable tracks (attempt \(attemptCopy))")
+                guard attemptCopy < 3 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    self?.handlePlayPlaylistCommand(name: playlistNameCopy, shuffle: shuffleCopy, attempt: attemptCopy + 1)
+                }
                 return
             }
             
-            tracksToPlay = shuffle ? tracksToPlay.shuffled() : tracksToPlay
-            print("[AudioReceiver] playplaylist: playing \(tracksToPlay.count) tracks for '\(targetPlaylist.name)' (shuffle: \(shuffle))")
+            tracksToPlay = shuffleCopy ? tracksToPlay.shuffled() : tracksToPlay
+            print("[AudioReceiver] playplaylist: playing \(tracksToPlay.count) tracks for '\(targetPlaylist.name)' (shuffle: \(shuffleCopy))")
             
-            self.state.isShuffleEnabled = shuffle
+            self.state.isShuffleEnabled = shuffleCopy
             self.play(tracks: tracksToPlay, startingAt: 0)
         }
         .store(in: &commandCancellables)
