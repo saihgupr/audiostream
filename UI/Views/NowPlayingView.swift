@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 struct ScrollOffsetPreferenceKey: PreferenceKey {
     typealias Value = CGFloat
@@ -314,7 +315,29 @@ struct NowPlayingView: View {
                                             .font(.system(size: 12))
                                     }
                                 }
-                                
+
+                                // Bottom utility row (AirPlay, like Apple Music)
+                                HStack {
+                                    AirPlayButton()
+                                        .frame(width: 44, height: 44)
+                                        .accessibilityLabel("AirPlay")
+
+                                    Spacer()
+
+                                    Button(action: {
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            showVolumeSlider.toggle()
+                                        }
+                                    }) {
+                                        Image(systemName: showVolumeSlider ? "speaker.wave.3.fill" : "speaker.fill")
+                                            .font(.system(size: 20, weight: .semibold))
+                                            .foregroundColor(showVolumeSlider ? Color.white.opacity(0.85) : Color.white.opacity(0.35))
+                                            .frame(width: 44, height: 44)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .accessibilityLabel("Volume Slider")
+                                }
+
                                 Spacer()
                             }
                             .padding(.trailing, 40)
@@ -523,7 +546,30 @@ struct NowPlayingView: View {
                                         }
                                     }
                                     .padding(.horizontal, 32)
-                                    
+
+                                    // Bottom utility row (AirPlay, like Apple Music)
+                                    HStack {
+                                        AirPlayButton()
+                                            .frame(width: 44, height: 44)
+                                            .accessibilityLabel("AirPlay")
+
+                                        Spacer()
+
+                                        Button(action: {
+                                            withAnimation(.easeInOut(duration: 0.15)) {
+                                                showVolumeSlider.toggle()
+                                            }
+                                        }) {
+                                            Image(systemName: showVolumeSlider ? "speaker.wave.3.fill" : "speaker.fill")
+                                                .font(.system(size: 20, weight: .semibold))
+                                                .foregroundColor(showVolumeSlider ? Color.white.opacity(0.85) : Color.white.opacity(0.35))
+                                                .frame(width: 44, height: 44)
+                                                .contentShape(Rectangle())
+                                        }
+                                        .accessibilityLabel("Volume Slider")
+                                    }
+                                    .padding(.horizontal, 32)
+
                                     Spacer(minLength: 30)
                                 }
                                 .frame(width: geometry.size.width, height: screenHeight - 50)
@@ -723,6 +769,18 @@ struct NowPlayingView: View {
         let seconds = Int(duration) % 60
         return String(format: "%d:%02d", minutes, seconds)
     }
+}
+
+private struct AirPlayButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.activeTintColor = .white
+        picker.tintColor = UIColor.white.withAlphaComponent(0.85)
+        picker.backgroundColor = .clear
+        return picker
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }
 // Struct moved to top
 
