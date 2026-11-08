@@ -17,6 +17,7 @@ final class HandoffService: ObservableObject {
     private var backgroundObserver: NSObjectProtocol?
     private var pollTask: Task<Void, Never>?
     private var lastSeq: UInt64 = 0
+    private var retryDelay: TimeInterval = 2
     private var dismissedID: String?
     private var applyingID: String?
     private var resumeCancellable: AnyCancellable?
@@ -92,7 +93,12 @@ final class HandoffService: ObservableObject {
     }
 
     private func waitForChange() async {
-        guard let base = sessionURL(), lastSeq != 0 else {
+        guard let base = sessionURL() else {
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            return
+        }
+
+        guard lastSeq != 0 else {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await refreshNow()
             return
@@ -108,12 +114,16 @@ final class HandoffService: ObservableObject {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { return }
+            retryDelay = 2
             updateSeq(from: http)
             if http.statusCode == 200 {
                 present(data)
             }
         } catch {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            // Server asleep or off the network: back off instead of hammering
+            // it every couple of seconds while the app is open.
+            try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+            retryDelay = min(retryDelay * 2, 30)
         }
     }
 
