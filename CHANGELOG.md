@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
-- **RemoteCompanion add-on**: AudioStream now ships `audiostream.json`, a RemoteCompanion add-on with actions for Shuffle All, Queue Album, Queue Artist, Delete Current Song, Play Playlist, Start and Stop, a Running condition, and an Allow Auto-Start setting. It installs with the package and only appears while AudioStream is installed. The `audiostream` command gained `shuffle`, `queuealbum`, `queueartist`, `deletesong`, `playlist` and `is-running` for the add-on to call.
+- **RemoteCompanion add-on**: AudioStream now ships `audiostream.json`, a RemoteCompanion add-on with actions for Shuffle All, Queue Album, Queue Artist, Delete Current Song, Play Playlist, Start and Stop, a Running condition, and an Allow Auto-Start setting. It installs with the package and only appears while AudioStream is installed. The `audiostream` command gained `wake`, `shuffle`, `queuealbum`, `queueartist`, `deletesong`, `playlist` and `is-running` for the add-on to call.
 - **NAS Music Server**: added `Server/NAS`, a small Go HTTP server that serves the mirrored library from an always-on Proxmox LXC. The mirror is refreshed from the iPhone over rsync every 30 minutes, with a 30-day trash folder for deleted or replaced files.
 - **NAS Sync Monitoring**: `/api/status` now reports the last sync result, counts, and free space. A Proxmox host timer checks it every 5 minutes and sends a Home Assistant notification if the server, sync, storage, or library count is unhealthy.
 - **AirPlay Button in Now Playing**: Added a native AirPlay route picker (`AVRoutePickerView`) to `NowPlayingView` in a bottom utility row below the playback controls, matching Apple Music placement. Available in both portrait and landscape layouts, balanced with the volume slider toggle. The icon tints system blue while actively casting, matching native iOS behavior.
@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **In-Place Album Merging**: Streamlined album merge mode with selection badges, primary target labels, and direct merge action without leaving the main library grid.
 
 ### Fixed
+- **Remote Wake Uses the Add-on**: the app asks RemoteCompanion to run `audiostream wake` through its command endpoint instead of the old `/api/audiostream/start` route. The wake command only starts a server that is down, so a streaming server is not restarted.
 - **NAS-Only Streaming No Longer Wakes the iPhone**: the app now only sends RemoteCompanion wake requests and adds `iphone.local` as a fallback when the configured server is actually an iPhone. A NAS timeout no longer starts the iPhone streaming daemon.
 - **NAS Stream URL Encoding**: fixed stream URLs being percent-encoded twice (`%2520`), which the iPhone daemon tolerated but the NAS server rejected with a 404. The NAS server also accepts legacy double-encoded paths so older app builds keep working.
 - **Quick Action Fetch Lifetime**: the library service is now kept alive while Shuffle All fetches are in flight, so quick actions no longer receive an empty library.

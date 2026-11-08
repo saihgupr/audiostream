@@ -214,12 +214,16 @@ class ServerConnectionService: ObservableObject {
         
         for host in hostsToTry {
             for p in ports {
-                guard let wakeURL = URL(string: "http://\(host):\(p)/api/audiostream/start") else { continue }
+                guard let wakeURL = URL(string: "http://\(host):\(p)/api/command") else { continue }
                 group.enter()
                 var request = URLRequest(url: wakeURL)
                 request.httpMethod = "POST"
-                request.httpBody = Data()
-                request.setValue("0", forHTTPHeaderField: "Content-Length")
+                // RemoteCompanion runs add-on commands from /api/command; the
+                // add-on decides whether auto-start is allowed.
+                let body = #"{"command":"audiostream wake"}"#.data(using: .utf8) ?? Data()
+                request.httpBody = body
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
                 request.timeoutInterval = 2.0
                 
                 URLSession.shared.dataTask(with: request) { data, response, error in

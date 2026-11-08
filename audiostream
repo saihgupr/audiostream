@@ -33,8 +33,11 @@ send_pending_command() {
     launch_app
 }
 
-case "$1" in
-    start)
+server_running() {
+    ps aux 2>/dev/null | grep -i '[a]udiostreamerd' | grep -v ' Z ' >/dev/null
+}
+
+start_server() {
         # Kill any existing daemon & monitor to ensure clean port binding
         HAD_RUNNING=0
         if [ -f "/tmp/autooff_monitor.pid" ]; then
@@ -60,7 +63,7 @@ case "$1" in
         
         # Check if auto-off flag was passed OR if enabled via app settings file
         AUTO_OFF_ENABLED=0
-        if [ "$2" = "--auto-off" ] || [ "$2" = "-a" ]; then
+        if [ "$1" = "--auto-off" ] || [ "$1" = "-a" ]; then
             AUTO_OFF_ENABLED=1
         elif [ -f "/tmp/audiostream_autooff.enabled" ] && [ "$(cat /tmp/audiostream_autooff.enabled)" = "1" ]; then
             AUTO_OFF_ENABLED=1
@@ -119,6 +122,20 @@ EOF
             nohup "$DAEMON_PATH" >> "$LOG_PATH" 2>&1 &
         fi
         echo "Started successfully."
+}
+
+case "$1" in
+    start)
+        start_server "$2"
+        ;;
+    wake)
+        # A client asking the server to wake up must not restart one that is
+        # already streaming; it only starts a server that is down.
+        if server_running; then
+            echo "AudioStream server is already running."
+        else
+            start_server "--auto-off"
+        fi
         ;;
     stop)
         echo "Stopping AudioStream server..."
@@ -134,7 +151,7 @@ EOF
         echo "Stopped."
         ;;
     status)
-        if ps aux 2>/dev/null | grep -i '[a]udiostreamerd' | grep -v ' Z ' >/dev/null; then
+        if server_running; then
             echo "AudioStream server is running."
             exit 0
         else
@@ -143,7 +160,7 @@ EOF
         fi
         ;;
     is-running)
-        if ps aux 2>/dev/null | grep -i '[a]udiostreamerd' | grep -v ' Z ' >/dev/null; then
+        if server_running; then
             echo 1
         else
             echo 0
@@ -172,7 +189,7 @@ EOF
         launch_app
         ;;
     *)
-        echo "Usage: audiostream {start|stop|status|is-running|shuffle|queuealbum|queueartist|deletesong|playlist} [--auto-off]"
+        echo "Usage: audiostream {start|wake|stop|status|is-running|shuffle|queuealbum|queueartist|deletesong|playlist} [--auto-off]"
         exit 1
         ;;
 esac

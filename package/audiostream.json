@@ -80,7 +80,7 @@
       "icon": "bolt.fill",
       "run": [
         { "defaults": { "domain": "com.saihgupr.audiostream.addon", "key": "autoStart", "read": true, "as": "autoStart" } },
-        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "start", "--auto-off"], "if": { "var": "autoStart", "is": "On" } }
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "wake"], "if": { "var": "autoStart", "is": "On" } }
       ],
       "banner": false
     }
