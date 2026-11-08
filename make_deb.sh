@@ -122,6 +122,16 @@ pack_flavor() {
     mkdir -p "$STAGING$INSTALL_DIR"
     cp -R "$APP_BUNDLE" "$STAGING$INSTALL_DIR/"
 
+    # RemoteCompanion add-on (hardware-button transfer)
+    local ADDON_DIR
+    if [ "$FLAVOR" = "rootless" ]; then
+        ADDON_DIR="/var/jb/Library/RemoteCompanion/AddOns"
+    else
+        ADDON_DIR="/Library/RemoteCompanion/AddOns"
+    fi
+    mkdir -p "$STAGING$ADDON_DIR"
+    cp "$PROJECT_ROOT"/package/RemoteCompanion/AddOns/*.json "$STAGING$ADDON_DIR/"
+
     # Control directory
     local CONTROL_DIR="$STAGING/DEBIAN"
     mkdir -p "$CONTROL_DIR"
@@ -156,7 +166,7 @@ PRERM
     if [ "$FLAVOR" = "rootless" ]; then
         (cd "$STAGING" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$DATA_TAR" var)
     else
-        (cd "$STAGING" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$DATA_TAR" Applications)
+        (cd "$STAGING" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$DATA_TAR" Applications Library)
     fi
 
     # Assemble debian archive

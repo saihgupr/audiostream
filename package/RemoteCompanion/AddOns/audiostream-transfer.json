@@ -1,0 +1,17 @@
+{
+  "api": 1,
+  "id": "audiostream-transfer",
+  "name": "AudioStream Transfer",
+  "icon": "arrow.up.right.circle.fill",
+  "actions": [
+    {
+      "command": "transfer",
+      "name": "Transfer Playback",
+      "icon": "arrow.up.right.circle.fill",
+      "run": [
+        { "url": "audiostream://handoff" }
+      ],
+      "banner": true
+    }
+  ]
+}

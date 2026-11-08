@@ -72,6 +72,10 @@ type Server struct {
 	pingJSON  []byte
 
 	scanMu sync.Mutex
+
+	sessionMu  sync.Mutex
+	sessionCh  chan struct{}
+	sessionSeq uint64
 }
 
 func main() {
@@ -87,7 +91,7 @@ func main() {
 		log.Fatalf("artwork dir: %v", err)
 	}
 
-	s := &Server{musicDir: *musicDir, dataDir: *dataDir}
+	s := &Server{musicDir: *musicDir, dataDir: *dataDir, sessionCh: make(chan struct{})}
 	if !s.loadCache() {
 		s.scan()
 	} else {
@@ -190,21 +194,19 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 // deliberately does not parse it: both apps share the schema, and keeping the
 // server schema-free means the payload can evolve without a server deploy.
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(s.dataDir, "handoff.json")
-
 	switch r.Method {
 	case http.MethodGet:
-		data, err := os.ReadFile(path)
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			fmt.Fprint(w, `{"error":"no session"}`)
+		// A seq parameter turns the read into a long poll: hold the
+		// connection until the session changes, so the other device sees a
+		// handoff immediately instead of waiting for its next poll tick.
+		if r.URL.Query().Get("seq") != "" {
+			s.waitForSession(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(data)
+		s.writeSession(w)
 
 	case http.MethodPut, http.MethodPost:
+		path := filepath.Join(s.dataDir, "handoff.json")
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil || len(body) == 0 {
 			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
@@ -219,17 +221,71 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"write failed"}`, http.StatusInternalServerError)
 			return
 		}
+		s.notifySession()
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
 
 	case http.MethodDelete:
-		os.Remove(path)
+		os.Remove(filepath.Join(s.dataDir, "handoff.json"))
+		s.notifySession()
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
 
 	default:
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) notifySession() {
+	s.sessionMu.Lock()
+	s.sessionSeq++
+	close(s.sessionCh)
+	s.sessionCh = make(chan struct{})
+	s.sessionMu.Unlock()
+}
+
+func (s *Server) currentSessionSeq() uint64 {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	return s.sessionSeq
+}
+
+func (s *Server) waitForSession(w http.ResponseWriter, r *http.Request) {
+	seq, _ := strconv.ParseUint(r.URL.Query().Get("seq"), 10, 64)
+
+	s.sessionMu.Lock()
+	ch := s.sessionCh
+	current := s.sessionSeq
+	s.sessionMu.Unlock()
+
+	if seq == current {
+		timer := time.NewTimer(25 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ch:
+		case <-timer.C:
+			w.Header().Set("X-Session-Seq", strconv.FormatUint(current, 10))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
+
+	s.writeSession(w)
+}
+
+func (s *Server) writeSession(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Session-Seq", strconv.FormatUint(s.currentSessionSeq(), 10))
+
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "handoff.json"))
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":"no session"}`)
+		return
+	}
+	w.Write(data)
 }
 
 func (s *Server) handleMusic(w http.ResponseWriter, r *http.Request) {

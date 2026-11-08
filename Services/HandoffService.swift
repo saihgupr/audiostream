@@ -8,15 +8,17 @@ import Combine
 final class HandoffService: ObservableObject {
     static let shared = HandoffService()
 
-    @Published var incoming: HandoffState?
     @Published var statusMessage: String?
     @Published var isBusy = false
 
     private weak var connection: ServerConnectionService?
+    private weak var player: AudioPlayerService?
     private var observer: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
-    private var pollTimer: Timer?
+    private var pollTask: Task<Void, Never>?
+    private var lastSeq: UInt64 = 0
     private var dismissedID: String?
+    private var applyingID: String?
     private var resumeCancellable: AnyCancellable?
     private var statusClearWorkItem: DispatchWorkItem?
 
@@ -36,8 +38,9 @@ final class HandoffService: ObservableObject {
 
     // MARK: - Lifecycle
 
-    func startMonitoring(connection: ServerConnectionService) {
+    func startMonitoring(connection: ServerConnectionService, player: AudioPlayerService) {
         self.connection = connection
+        self.player = player
 
         if observer == nil {
             observer = NotificationCenter.default.addObserver(
@@ -47,7 +50,7 @@ final class HandoffService: ObservableObject {
             ) { [weak self] _ in
                 guard let self else { return }
                 Task { @MainActor in
-                    await self.checkForIncoming()
+                    await self.refreshNow()
                     self.startPolling()
                 }
             }
@@ -59,24 +62,58 @@ final class HandoffService: ObservableObject {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                self?.pollTimer?.invalidate()
-                self?.pollTimer = nil
+                self?.stopPolling()
             }
         }
 
-        Task { await checkForIncoming() }
-        startPolling()
+        Task { @MainActor in
+            await refreshNow()
+            startPolling()
+        }
     }
 
-    /// The receiving device is often already open when the other one sends,
-    /// so a foreground check alone would miss the handoff.
+    /// Long poll: the server holds the request open until the session
+    /// changes, so a handoff shows up in well under a second instead of
+    /// waiting for the next timer tick.
     private func startPolling() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.checkForIncoming()
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.waitForChange()
+                try? await Task.sleep(nanoseconds: 300_000_000)
             }
+        }
+    }
+
+    private func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    private func waitForChange() async {
+        guard let base = sessionURL(), lastSeq != 0 else {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await refreshNow()
+            return
+        }
+
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "seq", value: String(lastSeq))]
+        guard let url = components?.url else { return }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 35
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return }
+            updateSeq(from: http)
+            if http.statusCode == 200 {
+                present(data)
+            }
+        } catch {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
 
@@ -144,25 +181,45 @@ final class HandoffService: ObservableObject {
 
     // MARK: - Receiving
 
-    func checkForIncoming() async {
+    func refreshNow() async {
         guard let url = sessionURL() else { return }
 
         var request = URLRequest(url: url)
-        request.timeoutInterval = 3
+        request.timeoutInterval = 5
 
         do {
             let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
-            let state = try decoder.decode(HandoffState.self, from: data)
-            guard state.version == HandoffState.currentVersion,
-                  state.fromDeviceID != HandoffDevice.id,
-                  Date().timeIntervalSince(state.updatedAt) < HandoffState.maxAge,
-                  state.id != dismissedID else {
-                return
+            guard let http = response as? HTTPURLResponse else { return }
+            updateSeq(from: http)
+            if http.statusCode == 200 {
+                present(data)
             }
-            incoming = state
         } catch {
             // No pending session, or the server is unreachable. Nothing to show.
+        }
+    }
+
+    private func present(_ data: Data) {
+        guard let state = try? decoder.decode(HandoffState.self, from: data) else { return }
+        guard state.version == HandoffState.currentVersion,
+              state.fromDeviceID != HandoffDevice.id,
+              Date().timeIntervalSince(state.updatedAt) < HandoffState.maxAge,
+              state.id != dismissedID,
+              state.id != applyingID,
+              let player,
+              let connection else {
+            return
+        }
+        applyingID = state.id
+        resume(state, in: player, connection: connection)
+    }
+
+    private func updateSeq(from response: HTTPURLResponse) {
+        if let raw = response.value(forHTTPHeaderField: "X-Session-Seq"), let value = UInt64(raw) {
+            lastSeq = value
+        } else {
+            // Server without long-poll support: fall back to short polling.
+            lastSeq = 0
         }
     }
 
@@ -174,6 +231,7 @@ final class HandoffService: ObservableObject {
             .sink(receiveCompletion: { [weak self] completion in
                 guard let self else { return }
                 if case .failure = completion {
+                    self.applyingID = nil
                     self.showStatus("Couldn't load your library")
                 }
                 self.resumeCancellable = nil
@@ -184,14 +242,9 @@ final class HandoffService: ObservableObject {
             })
     }
 
-    func dismissIncoming() {
-        if let incoming {
-            dismissedID = incoming.id
-        }
-        incoming = nil
-    }
-
     private func apply(_ state: HandoffState, tracks: [Track], player: AudioPlayerService) {
+        defer { applyingID = nil }
+
         var byPath: [String: Track] = [:]
         for track in tracks {
             guard let path = track.handoffPath, byPath[path] == nil else { continue }
@@ -199,8 +252,9 @@ final class HandoffService: ObservableObject {
         }
 
         guard byPath[state.trackPath] != nil else {
+            dismissedID = state.id
             showStatus("That song isn't in this device's library")
-            dismissIncoming()
+            Task { await deleteSession() }
             return
         }
 
@@ -215,8 +269,9 @@ final class HandoffService: ObservableObject {
         }
 
         guard !resolved.isEmpty else {
+            dismissedID = state.id
             showStatus("None of those songs are on this device")
-            dismissIncoming()
+            Task { await deleteSession() }
             return
         }
 
@@ -230,7 +285,6 @@ final class HandoffService: ObservableObject {
         )
 
         dismissedID = state.id
-        incoming = nil
         showStatus("Continuing from \(state.fromDeviceName)")
         Task { await deleteSession() }
     }
