@@ -178,15 +178,29 @@ class ServerConnectionService: ObservableObject {
     }
     
     // MARK: - Remote Wake Trigger (RemoteCompanion :8080 / :8081)
+    var isUsingIPhoneServer: Bool {
+        isIPhoneServerURL(serverURL)
+    }
+
     func wakeRemoteServer(targetHost: String? = nil, completion: ((Bool) -> Void)? = nil) {
+        // The NAS is a normal HTTP server and does not need a wake signal. Only
+        // wake an iPhone server, and only when the app is explicitly pointed at
+        // one. This prevents a NAS timeout from starting the iPhone daemon
+        // through RemoteCompanion.
+        guard isIPhoneServerURL(serverURL) else {
+            completion?(false)
+            return
+        }
+
         var hostsToTry: [String] = []
-        if let targetHost = targetHost, !targetHost.isEmpty {
+        if let targetHost = targetHost, !targetHost.isEmpty, isIPhoneHost(targetHost), !hostsToTry.contains(targetHost) {
             hostsToTry.append(targetHost)
         }
         if let url = URL(string: serverURL), let h = url.host, h != "localhost" && h != "127.0.0.1", !hostsToTry.contains(h) {
             hostsToTry.append(h)
         }
         if let lastUrl = UserDefaults.standard.string(forKey: kLastConnectedServerKey),
+           isIPhoneServerURL(lastUrl),
            let url = URL(string: lastUrl), let h = url.host, h != "localhost" && h != "127.0.0.1", !hostsToTry.contains(h) {
             hostsToTry.append(h)
         }
@@ -316,6 +330,25 @@ class ServerConnectionService: ObservableObject {
         isAutoConnecting = false
     }
     
+    private func isIPhoneHost(_ host: String) -> Bool {
+        let normalized = host.lowercased()
+        return normalized == "iphone.local" || normalized == "localhost" || normalized == "127.0.0.1"
+    }
+
+    private func isIPhoneServerURL(_ urlString: String) -> Bool {
+        guard let host = URL(string: urlString)?.host else { return false }
+        return isIPhoneHost(host)
+    }
+
+    private func isAllowedServerCandidate(_ urlString: String) -> Bool {
+        // When the app is configured for a non-iPhone server (the NAS), never
+        // silently fall back to the iPhone.
+        if serverURL.isEmpty || isIPhoneServerURL(serverURL) {
+            return true
+        }
+        return !isIPhoneServerURL(urlString)
+    }
+
     private func resolveCandidateURLs(preferredURL: String? = nil) -> [String] {
         var candidates: [String] = []
         
@@ -328,18 +361,21 @@ class ServerConnectionService: ObservableObject {
         }
         
         for discovered in discoveredServers {
-            if !candidates.contains(discovered) {
+            if !candidates.contains(discovered) && isAllowedServerCandidate(discovered) {
                 candidates.append(discovered)
             }
         }
         
         if let lastUrl = UserDefaults.standard.string(forKey: kLastConnectedServerKey),
-           !lastUrl.isEmpty && !candidates.contains(lastUrl) {
+           !lastUrl.isEmpty && !candidates.contains(lastUrl) && isAllowedServerCandidate(lastUrl) {
             candidates.append(lastUrl)
         }
         
+        // Only fall back to the iPhone when the app is configured for the
+        // iPhone (or has no server configured yet). A NAS setup must never
+        // silently connect to the phone.
         let iphoneLocalURL = "http://iphone.local:18080"
-        if !candidates.contains(iphoneLocalURL) {
+        if (serverURL.isEmpty || isIPhoneServerURL(serverURL)) && !candidates.contains(iphoneLocalURL) {
             candidates.append(iphoneLocalURL)
         }
         

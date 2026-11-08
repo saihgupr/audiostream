@@ -84,6 +84,11 @@ http://192.168.1.210:18080
 The app's disk cache is keyed by host, so artwork is fetched once from the NAS
 after switching. The iPhone daemon can stay configured as a fallback.
 
+While the app is pointed at the NAS it will not wake the iPhone streaming
+server or add `iphone.local` as a fallback. To use the iPhone again, set the
+server URL to `http://iphone.local:18080` and enable AudioStream auto-start in
+RemoteCompanion under Settings > Integrations.
+
 ## Notes
 
 - Metadata and duration are read with `dhowden/tag` and a lightweight MP4

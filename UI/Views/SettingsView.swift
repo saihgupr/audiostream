@@ -217,7 +217,7 @@ struct SettingsView: View {
                     }
                     
                     if connectionService.librarySource == .remote && !connectionService.isConnected {
-                        Button("Wake & Connect Server") {
+                        Button(connectionService.isUsingIPhoneServer ? "Wake & Connect Server" : "Retry Connection") {
                             connectionService.retryConnection()
                         }
                     }

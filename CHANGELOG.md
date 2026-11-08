@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **In-Place Album Merging**: Streamlined album merge mode with selection badges, primary target labels, and direct merge action without leaving the main library grid.
 
 ### Fixed
+- **NAS-Only Streaming No Longer Wakes the iPhone**: the app now only sends RemoteCompanion wake requests and adds `iphone.local` as a fallback when the configured server is actually an iPhone. A NAS timeout no longer starts the iPhone streaming daemon.
 - **NAS Stream URL Encoding**: fixed stream URLs being percent-encoded twice (`%2520`), which the iPhone daemon tolerated but the NAS server rejected with a 404. The NAS server also accepts legacy double-encoded paths so older app builds keep working.
 - **Quick Action Fetch Lifetime**: the library service is now kept alive while Shuffle All fetches are in flight, so quick actions no longer receive an empty library.
 - **Cold Launch Quick Actions Retry Until Library Ready**: Home Screen quick actions (`Shuffle All`, `Recently Added`, `Random Album`) fired their library fetch immediately on cold launch, racing server wake/auto-connect and local scan, so the first tap opened the app but silently played nothing. Each handler now retries up to 3 times at 1.5s intervals on failure or empty results.
