@@ -15,12 +15,11 @@ enum MusicLibraryError: LocalizedError {
 }
 
 struct RemoteLibraryCacheData: Codable {
-    static let currentVersion = 2
+    static let currentVersion = 3
     let version: Int
     let serverURL: String
     let albums: [Album]
     let playlists: [Playlist]
-    let tracks: [Track]
     let dateSaved: Date
 }
 
@@ -31,19 +30,55 @@ class RemoteLibraryDiskCache {
         return urls.first!.appendingPathComponent("remote_library_cache.json")
     }()
     
+    private struct Snapshot {
+        let serverURL: String
+        let albums: [Album]
+        let playlists: [Playlist]
+        let tracks: [Track]
+    }
+    
+    private let lock = NSLock()
+    private var snapshot: Snapshot?
+    
     func save(albums: [Album], playlists: [Playlist], tracks: [Track], serverURL: String) {
+        lock.lock()
+        snapshot = Snapshot(serverURL: serverURL, albums: albums, playlists: playlists, tracks: tracks)
+        lock.unlock()
+        
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
-            let cacheObj = RemoteLibraryCacheData(version: RemoteLibraryCacheData.currentVersion, serverURL: serverURL, albums: albums, playlists: playlists, tracks: tracks, dateSaved: Date())
+            let cacheObj = RemoteLibraryCacheData(version: RemoteLibraryCacheData.currentVersion, serverURL: serverURL, albums: albums, playlists: playlists, dateSaved: Date())
             if let encoded = try? JSONEncoder().encode(cacheObj) {
-                try? encoded.write(to: self.cacheFileUrl)
+                try? encoded.write(to: self.cacheFileUrl, options: .atomic)
             }
         }
     }
     
     func load(serverURL: String) -> (albums: [Album], playlists: [Playlist], tracks: [Track])? {
-        guard let data = try? Data(contentsOf: cacheFileUrl),
-              let cacheObj = try? JSONDecoder().decode(RemoteLibraryCacheData.self, from: data) else {
+        let rawTargetURL = serverURL.isEmpty ? (UserDefaults.standard.string(forKey: "RC_ServerURL") ?? "") : serverURL
+        let targetURL = rawTargetURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        
+        lock.lock()
+        let existing = snapshot
+        lock.unlock()
+        
+        if let existing = existing {
+            if normalizedURL(existing.serverURL) == normalizedURL(targetURL) {
+                return (existing.albums, existing.playlists, existing.tracks)
+            }
+            let rehydrated = rehydrate(albums: existing.albums, playlists: existing.playlists, tracks: existing.tracks, baseURLString: targetURL.isEmpty ? existing.serverURL : targetURL)
+            if let result = rehydrated {
+                lock.lock()
+                snapshot = Snapshot(serverURL: targetURL.isEmpty ? existing.serverURL : targetURL, albums: result.albums, playlists: result.playlists, tracks: result.tracks)
+                lock.unlock()
+                return result
+            }
+            return nil
+        }
+        
+        guard let data = try? Data(contentsOf: cacheFileUrl) else { return nil }
+        guard let cacheObj = try? JSONDecoder().decode(RemoteLibraryCacheData.self, from: data) else {
+            try? FileManager.default.removeItem(at: cacheFileUrl)
             return nil
         }
         
@@ -53,59 +88,84 @@ class RemoteLibraryDiskCache {
             return nil
         }
         
-        let rawTargetURL = serverURL.isEmpty ? (UserDefaults.standard.string(forKey: "RC_ServerURL") ?? "") : serverURL
-        let targetURL = rawTargetURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         let cachedURL = cacheObj.serverURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         
-        // If server URL is non-empty and doesn't match cached URL, don't return mismatched cache (but don't delete file)
-        if !targetURL.isEmpty && !cachedURL.isEmpty && targetURL.lowercased() != cachedURL.lowercased() {
+        // A changed host spelling (iphone.local vs a LAN IP) is fine: all URLs
+        // are rebuilt below. Only reject an entirely different server endpoint.
+        if let target = URL(string: targetURL.isEmpty ? cachedURL : targetURL),
+           let cached = URL(string: cachedURL),
+           target.port != cached.port {
             return nil
         }
         
         let activeURLString = targetURL.isEmpty ? cachedURL : targetURL
-        let baseURL = URL(string: activeURLString)
+        guard let result = rehydrate(albums: cacheObj.albums, playlists: cacheObj.playlists, tracks: nil, baseURLString: activeURLString) else {
+            return nil
+        }
         
-        let rehydratedTracks = cacheObj.tracks.map { track -> Track in
+        lock.lock()
+        snapshot = Snapshot(serverURL: activeURLString, albums: result.albums, playlists: result.playlists, tracks: result.tracks)
+        lock.unlock()
+        
+        return result
+    }
+    
+    private func normalizedURL(_ string: String) -> String {
+        string.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")).lowercased()
+    }
+    
+    private func rehydrate(albums: [Album], playlists: [Playlist], tracks: [Track]?, baseURLString: String) -> (albums: [Album], playlists: [Playlist], tracks: [Track])? {
+        guard let baseURL = URL(string: baseURLString) else { return nil }
+        
+        var rehydratedAlbums: [Album] = []
+        rehydratedAlbums.reserveCapacity(albums.count)
+        var allTracks: [Track] = []
+        allTracks.reserveCapacity(tracks?.count ?? albums.reduce(0) { $0 + $1.tracks.count })
+        var seenTrackIds = Set<String>()
+        
+        func hydrate(_ track: Track) -> Track {
             var t = track
-            if let baseURL = baseURL {
-                t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? track.filename)
-                t.artworkUrl = baseURL.appendingPathComponent("/artwork/\(track.persistentId)")
-            }
+            t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? track.filename)
+            t.artworkUrl = baseURL.appendingPathComponent("/artwork/\(track.persistentId)")
             return t
         }
         
-        let rehydratedAlbums = cacheObj.albums.map { album -> Album in
-            let updatedTracks = album.tracks.map { track -> Track in
-                var t = track
-                if let baseURL = baseURL {
-                    t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? track.filename)
-                    t.artworkUrl = baseURL.appendingPathComponent("/artwork/\(track.persistentId)")
-                }
-                return t
-            }
-            let artUrl = baseURL.flatMap { bURL in
-                album.tracks.sorted(by: Track.compareTrackOrder).first.map { bURL.appendingPathComponent("/artwork/\($0.persistentId)") }
-            } ?? album.artworkUrl
+        for album in albums {
+            let updatedTracks = album.tracks.map(hydrate)
+            let artworkTrack = updatedTracks.first
+            let artUrl = artworkTrack.map { baseURL.appendingPathComponent("/artwork/\($0.persistentId)") } ?? album.artworkUrl
             
-            return Album(
+            rehydratedAlbums.append(Album(
                 id: album.id,
                 title: album.title,
                 artist: album.artist,
                 artworkUrl: artUrl,
                 tracks: updatedTracks,
                 dateAdded: album.dateAdded
-            )
+            ))
+            
+            for t in updatedTracks where seenTrackIds.insert(t.persistentId).inserted {
+                allTracks.append(t)
+            }
         }
         
-        let rehydratedPlaylists = cacheObj.playlists.map { playlist -> Playlist in
-            var p = playlist
-            p.tracks = playlist.songIds.compactMap { id in
-                rehydratedTracks.first(where: { $0.id == id })
+        if let tracks = tracks, !tracks.isEmpty {
+            for t in tracks where seenTrackIds.insert(t.persistentId).inserted {
+                allTracks.append(hydrate(t))
             }
+        }
+        
+        var tracksById = [Int64: Track](minimumCapacity: allTracks.count)
+        for t in allTracks {
+            tracksById[t.id] = t
+        }
+        let rehydratedPlaylists = playlists.map { playlist -> Playlist in
+            var p = playlist
+            p.tracks = playlist.songIds.compactMap { tracksById[$0] }
             return p
         }
         
-        return (albums: rehydratedAlbums, playlists: rehydratedPlaylists, tracks: rehydratedTracks)
+        return (albums: rehydratedAlbums, playlists: rehydratedPlaylists, tracks: allTracks)
     }
 }
 
@@ -125,6 +185,17 @@ class MusicLibraryService: ObservableObject {
             return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
         }
         
+        return fetchRemoteTracks(forceRefresh: forceRefresh, baseURL: baseURL)
+            .map { [weak self] tracks -> [Album] in
+                guard let self = self else { return [] }
+                let hydrated = tracks.map { self.hydrate($0, baseURL: baseURL) }
+                return self.makeAlbums(from: hydrated, baseURL: baseURL)
+            }
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+    }
+    
+    private func fetchRemoteTracks(forceRefresh: Bool, baseURL: URL) -> AnyPublisher<[Track], Error> {
         var songsURL = baseURL.appendingPathComponent("/api/songs")
         if forceRefresh, var components = URLComponents(url: songsURL, resolvingAgainstBaseURL: false) {
             components.queryItems = [URLQueryItem(name: "refresh", value: "true")]
@@ -143,53 +214,119 @@ class MusicLibraryService: ObservableObject {
             })
             .map { $0.data }
             .decode(type: [Track].self, decoder: JSONDecoder())
-            .map { tracks -> [Album] in
-                // Group tracks by Album Name (and Artist to be safe)
-                let grouped = Dictionary(grouping: tracks) { $0.album }
-                
-                let rawAlbums = grouped.map { (albumName, albumTracks) -> Album in
-                    // Deterministic artwork pick: sort before picking first so
-                    // repeated fetches (server JSON order varies) yield same id.
-                    let orderedForArtwork = albumTracks.sorted(by: Track.compareTrackOrder)
-                    let artist = orderedForArtwork.first?.artist ?? "Unknown Artist"
-                    // Use the persistentId of the first track for album artwork
-                    let firstTrack = orderedForArtwork.first
-                    let artworkUrl = firstTrack.map { 
-                        baseURL.appendingPathComponent("/artwork/\($0.persistentId)") 
-                    }
-                    
-                    // Update tracks with stream/artwork URLs
-                    let updatedTracks = albumTracks.map { track -> Track in
-                        var t = track
-                        t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? track.filename)
-                        t.artworkUrl = baseURL.appendingPathComponent("/artwork/\(track.persistentId)")
-                        return t
-                    }
-                    
-                    let latestDate = albumTracks.compactMap { $0.dateAdded }.max()
-                    
-                    return Album(
-                        id: albumName, // Simple ID for now
-                        title: albumName,
-                        artist: artist,
-                        artworkUrl: artworkUrl,
-                        tracks: updatedTracks.sorted(by: Track.compareTrackOrder),
-                        dateAdded: latestDate
-                    )
-                }
-                let albumProcessed = AlbumMergeService.shared.process(albums: rawAlbums)
-                let processed = ArtistMergeService.shared.process(albums: albumProcessed)
-                return processed.sorted { lhs, rhs in
-                    let lhsDate = lhs.dateAdded ?? Date(timeIntervalSince1970: 0)
-                    let rhsDate = rhs.dateAdded ?? Date(timeIntervalSince1970: 0)
-                    if lhsDate != rhsDate {
-                        return lhsDate > rhsDate
-                    }
-                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-                }
-            }
-            .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
+    }
+    
+    private func hydrate(_ track: Track, baseURL: URL) -> Track {
+        var t = track
+        t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? track.filename)
+        t.artworkUrl = baseURL.appendingPathComponent("/artwork/\(track.persistentId)")
+        return t
+    }
+    
+    private func makeAlbums(from tracks: [Track], baseURL: URL) -> [Album] {
+        // Group tracks by Album Name (and Artist to be safe)
+        let grouped = Dictionary(grouping: tracks) { $0.album }
+        
+        let rawAlbums = grouped.map { (albumName, albumTracks) -> Album in
+            // Deterministic artwork pick: sort before picking first so
+            // repeated fetches (server JSON order varies) yield same id.
+            let orderedForArtwork = albumTracks.sorted(by: Track.compareTrackOrder)
+            let artist = orderedForArtwork.first?.artist ?? "Unknown Artist"
+            // Use the persistentId of the first track for album artwork
+            let firstTrack = orderedForArtwork.first
+            let artworkUrl = firstTrack.map {
+                baseURL.appendingPathComponent("/artwork/\($0.persistentId)")
+            }
+            
+            let latestDate = albumTracks.compactMap { $0.dateAdded }.max()
+            
+            return Album(
+                id: albumName, // Simple ID for now
+                title: albumName,
+                artist: artist,
+                artworkUrl: artworkUrl,
+                tracks: orderedForArtwork,
+                dateAdded: latestDate
+            )
+        }
+        let albumProcessed = AlbumMergeService.shared.process(albums: rawAlbums)
+        let processed = ArtistMergeService.shared.process(albums: albumProcessed)
+        return processed.sorted { lhs, rhs in
+            let lhsDate = lhs.dateAdded ?? Date(timeIntervalSince1970: 0)
+            let rhsDate = rhs.dateAdded ?? Date(timeIntervalSince1970: 0)
+            if lhsDate != rhsDate {
+                return lhsDate > rhsDate
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
+    
+    /// Fetches songs and playlists in one pass so a launch refresh doesn't
+    /// download and decode the full song list twice.
+    func fetchRemoteLibraryAsync(forceRefresh: Bool = false) async throws -> (albums: [Album], tracks: [Track], playlists: [Playlist]) {
+        guard let baseURL = URL(string: connectionService.serverURL) else {
+            throw URLError(.badURL)
+        }
+        
+        let songsURL = apiURL(baseURL: baseURL, path: "/api/songs", forceRefresh: forceRefresh)
+        let songsRequest = makeRequest(url: songsURL, forceRefresh: forceRefresh)
+        
+        let playlistsURL = apiURL(baseURL: baseURL, path: "/api/playlists", forceRefresh: forceRefresh)
+        let playlistsRequest = makeRequest(url: playlistsURL, forceRefresh: forceRefresh)
+        
+        async let songsResult = URLSession.shared.data(for: songsRequest)
+        async let playlistsResult = URLSession.shared.data(for: playlistsRequest)
+        
+        let (songsData, songsResponse) = try await songsResult
+        let (playlistsData, playlistsResponse) = try await playlistsResult
+        
+        guard let songsHTTP = songsResponse as? HTTPURLResponse, (200...299).contains(songsHTTP.statusCode),
+              let playlistsHTTP = playlistsResponse as? HTTPURLResponse, (200...299).contains(playlistsHTTP.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        
+        connectionService.markConnected(url: baseURL.absoluteString)
+        
+        let rawTracks = try JSONDecoder().decode([Track].self, from: songsData)
+        let hydratedTracks = rawTracks.map { hydrate($0, baseURL: baseURL) }
+        let albums = makeAlbums(from: hydratedTracks, baseURL: baseURL)
+        
+        let mergedTracks = ArtistMergeService.shared.process(
+            tracks: AlbumMergeService.shared.process(tracks: hydratedTracks)
+        )
+        
+        let rawPlaylists = try JSONDecoder().decode([Playlist].self, from: playlistsData)
+        var tracksById = [Int64: Track](minimumCapacity: mergedTracks.count)
+        for track in mergedTracks {
+            tracksById[track.id] = track
+        }
+        let playlists = rawPlaylists.map { playlist -> Playlist in
+            var p = playlist
+            p.tracks = playlist.songIds.compactMap { tracksById[$0] }
+            return p
+        }
+        
+        return (albums: albums, tracks: mergedTracks, playlists: playlists)
+    }
+    
+    private func apiURL(baseURL: URL, path: String, forceRefresh: Bool) -> URL {
+        var url = baseURL.appendingPathComponent(path)
+        if forceRefresh, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = [URLQueryItem(name: "refresh", value: "true")]
+            if let u = components.url {
+                url = u
+            }
+        }
+        return url
+    }
+    
+    private func makeRequest(url: URL, forceRefresh: Bool) -> URLRequest {
+        var request = URLRequest(url: url)
+        if forceRefresh {
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+        }
+        return request
     }
     
     func fetchPlaylists(forceRefresh: Bool = false) -> AnyPublisher<[Playlist], Error> {
@@ -232,30 +369,10 @@ class MusicLibraryService: ObservableObject {
         guard let baseURL = URL(string: connectionService.serverURL) else {
             return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
         }
-        var songsURL = baseURL.appendingPathComponent("/api/songs")
-        if forceRefresh, var components = URLComponents(url: songsURL, resolvingAgainstBaseURL: false) {
-            components.queryItems = [URLQueryItem(name: "refresh", value: "true")]
-            if let u = components.url {
-                songsURL = u
-            }
-        }
-        var request = URLRequest(url: songsURL)
-        if forceRefresh {
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-        }
-        return URLSession.shared.dataTaskPublisher(for: request)
-            .handleEvents(receiveOutput: { [weak self] _ in
-                self?.connectionService.markConnected(url: baseURL.absoluteString)
-            })
-            .map { $0.data }
-            .decode(type: [Track].self, decoder: JSONDecoder())
-            .map { tracks in
-                let updated = tracks.map { track -> Track in
-                    var t = track
-                    t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? track.filename)
-                    t.artworkUrl = baseURL.appendingPathComponent("/artwork/\(track.persistentId)")
-                    return t
-                }
+        return fetchRemoteTracks(forceRefresh: forceRefresh, baseURL: baseURL)
+            .map { [weak self] tracks in
+                guard let self = self else { return [] }
+                let updated = tracks.map { self.hydrate($0, baseURL: baseURL) }
                 let albumProcessed = AlbumMergeService.shared.process(tracks: updated)
                 return ArtistMergeService.shared.process(tracks: albumProcessed)
             }

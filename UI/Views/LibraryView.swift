@@ -931,15 +931,29 @@ struct LibraryView: View {
     func loadCacheSynchronously(serverURL: String? = nil) {
         guard albums.isEmpty else { return }
         
+        let sourceString = UserDefaults.standard.string(forKey: "RC_LibrarySource") ?? LibrarySource.remote.rawValue
+        let source = LibrarySource(rawValue: sourceString) ?? .remote
+        
+        if source == .local {
+            if let cached = LocalLibraryDiskCache.shared.load() {
+                applyCachedLibrary(albums: cached.albums, playlists: cached.playlists, tracks: cached.tracks)
+            }
+            return
+        }
+        
         // Instant synchronous fast path: load from disk cache if available
         if let cached = RemoteLibraryDiskCache.shared.load(serverURL: serverURL ?? "") {
-            self.albums = cached.albums
-            self.playlists = cached.playlists
-            self.allTracks = cached.tracks
-            let allArt = cached.albums.flatMap { $0.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
-            self.artists = ArtistMergeService.shared.process(artists: allArt)
-            self.generateSpecialPlaylists()
+            applyCachedLibrary(albums: cached.albums, playlists: cached.playlists, tracks: cached.tracks)
         }
+    }
+    
+    private func applyCachedLibrary(albums: [Album], playlists: [Playlist], tracks: [Track]) {
+        self.albums = albums
+        self.playlists = playlists
+        self.allTracks = tracks
+        let allArt = albums.flatMap { $0.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+        self.artists = ArtistMergeService.shared.process(artists: allArt)
+        self.generateSpecialPlaylists()
     }
     
     func loadData(connectionService: ServerConnectionService, clearData: Bool = false, forceRefresh: Bool = false) {
@@ -971,29 +985,7 @@ struct LibraryView: View {
         
         // Fast path: load from disk cache instantly if empty
         if albums.isEmpty {
-            if source == .remote {
-                loadCacheSynchronously(serverURL: connectionService.serverURL)
-            } else if source == .local {
-                let cachedAlbums = await Task.detached(priority: .userInitiated) {
-                    LocalFileLibraryScanner.shared.scanAlbums(forceRefresh: false)
-                }.value
-                if !cachedAlbums.isEmpty {
-                    self.albums = cachedAlbums
-                    let rawTracks = cachedAlbums.flatMap { $0.tracks }
-                    var seenIds = Set<Int64>()
-                    var uniqueTracks: [Track] = []
-                    for track in rawTracks {
-                        if !seenIds.contains(track.id) {
-                            seenIds.insert(track.id)
-                            uniqueTracks.append(track)
-                        }
-                    }
-                    self.allTracks = uniqueTracks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-                    let allArt = cachedAlbums.flatMap { $0.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
-                    self.artists = ArtistMergeService.shared.process(artists: allArt)
-                    self.generateSpecialPlaylists()
-                }
-            }
+            loadCacheSynchronously(serverURL: connectionService.serverURL)
         }
         
         // Show spinner only if we have zero cached items to display
@@ -1008,15 +1000,25 @@ struct LibraryView: View {
         let service = MusicLibraryService(connectionService: connectionService)
         
         do {
-            async let albumsTask = service.fetchAlbums(forceRefresh: forceRefresh).asyncValue()
-            async let playlistsTask = service.fetchPlaylists(forceRefresh: forceRefresh).asyncValue()
-            
-            let loadedAlbums = try await albumsTask
-            var loadedPlaylists = try await playlistsTask
-            
+            let loadedAlbums: [Album]
+            let loadedPlaylists: [Playlist]
             let loadedTracks: [Track]
-            if source == .local {
-                let rawTracks = loadedAlbums.flatMap { $0.tracks }
+            
+            if source == .remote {
+                let snapshot = try await service.fetchRemoteLibraryAsync(forceRefresh: forceRefresh)
+                loadedAlbums = snapshot.albums
+                loadedPlaylists = snapshot.playlists
+                loadedTracks = snapshot.tracks
+                // Persist updated remote library to disk cache
+                RemoteLibraryDiskCache.shared.save(albums: loadedAlbums, playlists: loadedPlaylists, tracks: loadedTracks, serverURL: connectionService.serverURL)
+            } else {
+                async let albumsTask = service.fetchAlbums(forceRefresh: forceRefresh).asyncValue()
+                async let playlistsTask = service.fetchPlaylists(forceRefresh: forceRefresh).asyncValue()
+                
+                let albums = try await albumsTask
+                loadedPlaylists = try await playlistsTask
+                
+                let rawTracks = albums.flatMap { $0.tracks }
                 var seenIds = Set<Int64>()
                 var uniqueTracks: [Track] = []
                 for track in rawTracks {
@@ -1026,21 +1028,9 @@ struct LibraryView: View {
                     }
                 }
                 loadedTracks = uniqueTracks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-            } else {
-                loadedTracks = try await service.fetchAllTracks(forceRefresh: forceRefresh).asyncValue()
-            }
-            
-            if source == .remote {
-                let hydrated = loadedPlaylists.map { playlist -> Playlist in
-                    var p = playlist
-                    p.tracks = playlist.songIds.compactMap { id in
-                        loadedTracks.first(where: { $0.id == id })
-                    }
-                    return p
-                }
-                loadedPlaylists = hydrated
-                // Persist updated remote library to disk cache
-                RemoteLibraryDiskCache.shared.save(albums: loadedAlbums, playlists: loadedPlaylists, tracks: loadedTracks, serverURL: connectionService.serverURL)
+                loadedAlbums = albums
+                // Persist the processed local library for an instant next launch
+                LocalLibraryDiskCache.shared.save(albums: albums, playlists: loadedPlaylists)
             }
             
             // Suppress animation to avoid visible flash when background fetch replaces cached data
@@ -1087,7 +1077,6 @@ struct LibraryView: View {
         }
         
         let now = Date()
-        var trackDates: [String: Date] = [:]
         var tracksWithDates: [(track: Track, date: Date)] = []
         
         for track in allTracks {
@@ -1099,11 +1088,17 @@ struct LibraryView: View {
             }
             
             let dateToUse = trackDate ?? Date(timeIntervalSince1970: 0)
-            trackDates[track.persistentId] = dateToUse
             tracksWithDates.append((track, dateToUse))
         }
         
-        let sortedTracksWithDates = tracksWithDates.sorted { $0.date > $1.date }
+        // One sort for every "recent" playlist. Sorting once here avoids
+        // re-sorting five subsets on every library load.
+        let sortedTracksWithDates = tracksWithDates.sorted { lhs, rhs in
+            if lhs.date != rhs.date {
+                return lhs.date > rhs.date
+            }
+            return lhs.track.title.localizedCaseInsensitiveCompare(rhs.track.title) == .orderedAscending
+        }
         
         let twoWeeksAgo = now.addingTimeInterval(-14 * 24 * 3600)
         let oneMonthAgo = now.addingTimeInterval(-30 * 24 * 3600)
@@ -1111,7 +1106,7 @@ struct LibraryView: View {
         let sixMonthsAgo = now.addingTimeInterval(-180 * 24 * 3600)
         let oneYearAgo = now.addingTimeInterval(-365 * 24 * 3600)
         
-        let recentByDate = sortedTracksWithDates.filter { $0.date >= twoWeeksAgo }.map { $0.track }
+        let recentByDate = sortedTracksWithDates.prefix { $0.date >= twoWeeksAgo }.map { $0.track }
         let recentlyAddedTracks: [Track]
         if recentByDate.count < 20 {
             recentlyAddedTracks = Array(sortedTracksWithDates.prefix(100).map { $0.track })
@@ -1119,30 +1114,19 @@ struct LibraryView: View {
             recentlyAddedTracks = Array(recentByDate.prefix(100))
         }
         
-        let monthTracks = sortedTracksWithDates.filter { $0.date >= oneMonthAgo }.map { $0.track }
-        let threeMonthsTracks = sortedTracksWithDates.filter { $0.date >= threeMonthsAgo }.map { $0.track }
-        let sixMonthsTracks = sortedTracksWithDates.filter { $0.date >= sixMonthsAgo }.map { $0.track }
-        let yearTracks = sortedTracksWithDates.filter { $0.date >= oneYearAgo }.map { $0.track }
+        let monthTracks = sortedTracksWithDates.prefix { $0.date >= oneMonthAgo }.map { $0.track }
+        let threeMonthsTracks = sortedTracksWithDates.prefix { $0.date >= threeMonthsAgo }.map { $0.track }
+        let sixMonthsTracks = sortedTracksWithDates.prefix { $0.date >= sixMonthsAgo }.map { $0.track }
+        let yearTracks = sortedTracksWithDates.prefix { $0.date >= oneYearAgo }.map { $0.track }
         
         var specialPlaylists: [Playlist] = []
-        
-        func sortTracksByDate(_ tracksToSort: [Track]) -> [Track] {
-            return tracksToSort.sorted { lhs, rhs in
-                let lhsDate = trackDates[lhs.persistentId] ?? Date(timeIntervalSince1970: 0)
-                let rhsDate = trackDates[rhs.persistentId] ?? Date(timeIntervalSince1970: 0)
-                if lhsDate != rhsDate {
-                    return lhsDate > rhsDate
-                }
-                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-            }
-        }
         
         if !recentlyAddedTracks.isEmpty {
             specialPlaylists.append(Playlist(
                 id: -1,
                 name: "Recently Added",
                 songIds: recentlyAddedTracks.map { $0.id },
-                tracks: sortTracksByDate(recentlyAddedTracks)
+                tracks: recentlyAddedTracks
             ))
         }
         
@@ -1151,7 +1135,7 @@ struct LibraryView: View {
                 id: -2,
                 name: "Month",
                 songIds: monthTracks.map { $0.id },
-                tracks: sortTracksByDate(monthTracks)
+                tracks: monthTracks
             ))
         }
         
@@ -1160,7 +1144,7 @@ struct LibraryView: View {
                 id: -3,
                 name: "3 Months",
                 songIds: threeMonthsTracks.map { $0.id },
-                tracks: sortTracksByDate(threeMonthsTracks)
+                tracks: threeMonthsTracks
             ))
         }
         
@@ -1169,7 +1153,7 @@ struct LibraryView: View {
                 id: -4,
                 name: "6 Months",
                 songIds: sixMonthsTracks.map { $0.id },
-                tracks: sortTracksByDate(sixMonthsTracks)
+                tracks: sixMonthsTracks
             ))
         }
         
@@ -1178,13 +1162,13 @@ struct LibraryView: View {
                 id: -5,
                 name: "Year",
                 songIds: yearTracks.map { $0.id },
-                tracks: sortTracksByDate(yearTracks)
+                tracks: yearTracks
             ))
         }
         
         self.playlists.removeAll { $0.id < 0 }
         self.playlists.insert(contentsOf: specialPlaylists, at: 0)
-        self.allTracks = sortTracksByDate(self.allTracks)
+        self.allTracks = sortedTracksWithDates.map { $0.track }
     }
     
     func tracksForArtist(_ artist: String) -> [Track] {

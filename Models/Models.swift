@@ -75,23 +75,22 @@ struct Track: Identifiable, Codable, Equatable {
 }
 
 extension Track {
+    private static let discTrackRegex = try! NSRegularExpression(pattern: "^\\d+[.-_](\\d{1,3})\\b")
+    private static let leadingNumRegex = try! NSRegularExpression(pattern: "^(?:track|trk)?\\s*(\\d{1,3})\\b", options: .caseInsensitive)
+
     static func extractTrackNumberFromFilename(_ filename: String) -> Int? {
         let base = (filename as NSString).deletingPathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty else { return nil }
         
         // 1. Match disc-track numbers at start e.g. "1-01", "1.01", "1_01"
-        let discTrackPattern = "^\\d+[.-_](\\d{1,3})\\b"
-        if let regex = try? NSRegularExpression(pattern: discTrackPattern),
-           let match = regex.firstMatch(in: base, range: NSRange(location: 0, length: base.utf16.count)),
+        if let match = discTrackRegex.firstMatch(in: base, range: NSRange(location: 0, length: base.utf16.count)),
            let range = Range(match.range(at: 1), in: base),
            let num = Int(base[range]), num > 0 {
             return num
         }
 
         // 2. Match leading numbers e.g. "01 - Title", "01. Title", "01_Title", "01 Title", "Track 01"
-        let leadingNumPattern = "^(?:track|trk)?\\s*(\\d{1,3})\\b"
-        if let regex = try? NSRegularExpression(pattern: leadingNumPattern, options: .caseInsensitive),
-           let match = regex.firstMatch(in: base, range: NSRange(location: 0, length: base.utf16.count)),
+        if let match = leadingNumRegex.firstMatch(in: base, range: NSRange(location: 0, length: base.utf16.count)),
            let range = Range(match.range(at: 1), in: base),
            let num = Int(base[range]), num > 0 {
             return num

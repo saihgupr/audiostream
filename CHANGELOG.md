@@ -27,4 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Auto-Connect Stability**: Improved reconnect logic and state restoration when switching between local playback and network streaming.
 
 ### Changed
+- **Faster Library Launch**: the remote library cache now stores each track once, rehydrates URLs with dictionary lookups instead of linear playlist scans, and keeps a decoded in-memory snapshot. Cold-start album rendering on iPad dropped from ~2.9s to under a second.
+- **Single Library Fetch at Launch**: remote refresh now downloads `/api/songs` once and builds albums, tracks, and playlists from that response instead of fetching the full song list twice.
+- **Faster Streaming Server Requests**: the daemon now caches merged song results and the serialized `/api/songs` payload, and applies album/artist merge groups through lookup tables. Warm `/api/songs` responses dropped from ~2s to ~20ms.
 - **Battery Saver Mode**: Optimized streaming daemon auto-off idle monitor to shut down background server after inactivity timeout, preserving battery life.

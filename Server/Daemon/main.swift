@@ -80,10 +80,13 @@ class AudioStreamerDaemon {
     private var cachedArtistGroups: [ArtistMergeGroup] = []
     private var lastAlbumGroupsModDate: Date? = nil
     private var lastArtistGroupsModDate: Date? = nil
+    private var mergeGroupsRevision = 0
     private let mergeGroupsLock = NSLock()
     
     private var httpServer: SimpleHTTPServer?
     private var songs: [Song] = []
+    private var mergedSongsCache: [Song]?
+    private var mergedSongsCacheRevision = -1
     private var playlists: [Playlist] = []
     private var songFilePaths: [UInt64: String] = [:]
     
@@ -122,9 +125,13 @@ class AudioStreamerDaemon {
                    let groups = try? JSONDecoder().decode([MergeGroup].self, from: data) {
                     cachedAlbumGroups = groups
                     lastAlbumGroupsModDate = modDate
+                    mergeGroupsRevision &+= 1
                 }
             }
         } else {
+            if !cachedAlbumGroups.isEmpty {
+                mergeGroupsRevision &+= 1
+            }
             cachedAlbumGroups = []
             lastAlbumGroupsModDate = nil
         }
@@ -137,9 +144,13 @@ class AudioStreamerDaemon {
                    let groups = try? JSONDecoder().decode([ArtistMergeGroup].self, from: data) {
                     cachedArtistGroups = groups
                     lastArtistGroupsModDate = modDate
+                    mergeGroupsRevision &+= 1
                 }
             }
         } else {
+            if !cachedArtistGroups.isEmpty {
+                mergeGroupsRevision &+= 1
+            }
             cachedArtistGroups = []
             lastArtistGroupsModDate = nil
         }
@@ -176,7 +187,17 @@ class AudioStreamerDaemon {
                 guard let self = self else { return [] }
                 self.songsLock.lock()
                 defer { self.songsLock.unlock() }
-                return self.applyMergeGroups(to: self.songs)
+                // Refresh merge-group revisions (two cheap stat calls) so edits
+                // from the app are picked up without rescanning the library.
+                _ = self.getCachedMergeGroups()
+                if let cached = self.mergedSongsCache, self.mergedSongsCacheRevision == self.mergeGroupsRevision {
+                    return cached
+                }
+                let merged = self.applyMergeGroups(to: self.songs)
+                self.mergedSongsCache = merged
+                self.mergedSongsCacheRevision = self.mergeGroupsRevision
+                self.httpServer?.invalidateSongsJSONCache()
+                return merged
             },
             playlistsProvider: { [weak self] in
                 guard let self = self else { return [] }
@@ -223,6 +244,7 @@ class AudioStreamerDaemon {
         
         // Synchronously load full song library
         self.loadSongs()
+        self.httpServer?.markLibraryReady()
         serverLog("Daemon loaded \(self.songs.count) songs and \(self.playlists.count) playlists.")
         serverLog("Daemon is running on port \(port).")
         
@@ -284,7 +306,9 @@ class AudioStreamerDaemon {
         
         self.songs = loadedSongs
         self.songFilePaths = map
+        self.mergedSongsCache = nil
         self.updateCachedCounts(songs: loadedSongs.count)
+        self.httpServer?.invalidateSongsJSONCache()
         loadPlaylists()
     }
     
@@ -392,6 +416,10 @@ class AudioStreamerDaemon {
         return nil
     }
     
+    private func normalizedMergeKey(_ value: String) -> String {
+        return value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+    
     private func applyMergeGroups(to songs: [Song]) -> [Song] {
         let (albumGroups, artistGroups) = getCachedMergeGroups()
         
@@ -399,33 +427,45 @@ class AudioStreamerDaemon {
             return songs
         }
         
+        // Build lookup tables once so per-song merging stays O(1) instead of
+        // scanning every group/member for every song (which made /api/songs
+        // take seconds with a few dozen album groups).
+        var albumIndex: [String: (title: String, artist: String)] = [:]
+        for group in albumGroups {
+            for member in group.members {
+                let key = "\(normalizedMergeKey(member.title))|\(normalizedMergeKey(member.artist))"
+                if albumIndex[key] == nil {
+                    albumIndex[key] = (group.targetTitle, group.targetArtist)
+                }
+            }
+        }
+        
+        var artistIndex: [String: String] = [:]
+        for group in artistGroups {
+            for member in group.members {
+                let key = normalizedMergeKey(member)
+                if artistIndex[key] == nil {
+                    artistIndex[key] = group.targetArtist
+                }
+            }
+        }
+        
         return songs.map { song in
             var updatedArtist = song.artist
             var updatedAlbum = song.album
             
             // 1. Apply Album merge
-            if let group = albumGroups.first(where: { group in
-                group.members.contains(where: { member in
-                    member.matches(title: song.album, artist: song.artist)
-                })
-            }) {
-                updatedArtist = group.targetArtist
-                updatedAlbum = group.targetTitle
+            if let target = albumIndex["\(normalizedMergeKey(song.album))|\(normalizedMergeKey(song.artist))"] {
+                updatedArtist = target.artist
+                updatedAlbum = target.title
             }
             
             // 2. Apply Artist merge (mapping comma-separated components)
-            if !artistGroups.isEmpty {
+            if !artistIndex.isEmpty {
                 let parts = updatedArtist.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
                 var canonicalParts: [String] = []
                 for part in parts {
-                    let canonical: String
-                    if let group = artistGroups.first(where: { g in
-                        g.members.contains(where: { $0.localizedCaseInsensitiveCompare(part) == .orderedSame })
-                    }) {
-                        canonical = group.targetArtist
-                    } else {
-                        canonical = part
-                    }
+                    let canonical = artistIndex[normalizedMergeKey(part)] ?? part
                     if !canonicalParts.contains(where: { $0.localizedCaseInsensitiveCompare(canonical) == .orderedSame }) {
                         canonicalParts.append(canonical)
                     }
@@ -806,6 +846,7 @@ class AudioStreamerDaemon {
         
         songs.remove(at: songIndex)
         songFilePaths.removeValue(forKey: song.persistentId)
+        mergedSongsCache = nil
         self.updateCachedCounts(songs: songs.count)
         
         if persistentCache.removeValue(forKey: customPath) != nil {

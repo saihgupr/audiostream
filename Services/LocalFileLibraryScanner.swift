@@ -129,6 +129,181 @@ struct CachedTrack: Codable {
     let fileSize: Int64
 }
 
+// MARK: - Local Library Snapshot
+
+struct LocalLibraryCacheData: Codable {
+    static let currentVersion = 1
+    let version: Int
+    let albums: [CachedLocalAlbum]
+    let playlists: [Playlist]
+    let dateSaved: Date
+}
+
+struct CachedLocalAlbum: Codable {
+    let id: String
+    let title: String
+    let artist: String
+    let artworkUrlString: String?
+    let dateAdded: Date?
+    let tracks: [CachedLocalTrack]
+}
+
+struct CachedLocalTrack: Codable {
+    let id: Int64
+    let persistentId: String
+    let title: String
+    let artist: String
+    let album: String
+    let filename: String
+    let duration: TimeInterval
+    let dateAdded: Date?
+    let albumArtist: String?
+    let trackNumber: Int?
+    let streamUrlString: String?
+    let artworkUrlString: String?
+    
+    init(_ track: Track) {
+        id = track.id
+        persistentId = track.persistentId
+        title = track.title
+        artist = track.artist
+        album = track.album
+        filename = track.filename
+        duration = track.duration
+        dateAdded = track.dateAdded
+        albumArtist = track.albumArtist
+        trackNumber = track.trackNumber
+        streamUrlString = track.streamUrl?.absoluteString
+        artworkUrlString = track.artworkUrl?.absoluteString
+    }
+    
+    var track: Track {
+        var t = Track(
+            id: id,
+            persistentId: persistentId,
+            title: title,
+            artist: artist,
+            album: album,
+            filename: filename,
+            duration: duration,
+            dateAdded: dateAdded,
+            artworkUrl: artworkUrlString.flatMap(URL.init(string:)),
+            streamUrl: streamUrlString.flatMap(URL.init(string:)),
+            albumArtist: albumArtist,
+            trackNumber: trackNumber
+        )
+        t.albumArtist = albumArtist
+        t.trackNumber = trackNumber
+        return t
+    }
+}
+
+/// Instant-launch snapshot of the processed local library. The folder scan
+/// still runs in the background, but the grid paints from this cache first.
+class LocalLibraryDiskCache {
+    static let shared = LocalLibraryDiskCache()
+    
+    private let cacheFileUrl: URL = {
+        let urls = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+        return urls.first!.appendingPathComponent("local_library_cache.json")
+    }()
+    
+    private let lock = NSLock()
+    private var snapshot: (albums: [Album], playlists: [Playlist], tracks: [Track])?
+    
+    func save(albums: [Album], playlists: [Playlist]) {
+        var allTracks: [Track] = []
+        var seenIds = Set<String>()
+        for album in albums {
+            for track in album.tracks where seenIds.insert(track.persistentId).inserted {
+                allTracks.append(track)
+            }
+        }
+        
+        lock.lock()
+        snapshot = (albums, playlists, allTracks)
+        lock.unlock()
+        
+        let cachedAlbums = albums.map { album in
+            CachedLocalAlbum(
+                id: album.id,
+                title: album.title,
+                artist: album.artist,
+                artworkUrlString: album.artworkUrl?.absoluteString,
+                dateAdded: album.dateAdded,
+                tracks: album.tracks.map(CachedLocalTrack.init)
+            )
+        }
+        let cacheObj = LocalLibraryCacheData(
+            version: LocalLibraryCacheData.currentVersion,
+            albums: cachedAlbums,
+            playlists: playlists,
+            dateSaved: Date()
+        )
+        
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            if let encoded = try? JSONEncoder().encode(cacheObj) {
+                try? encoded.write(to: self.cacheFileUrl, options: .atomic)
+            }
+        }
+    }
+    
+    func load() -> (albums: [Album], playlists: [Playlist], tracks: [Track])? {
+        lock.lock()
+        if let snapshot = snapshot {
+            lock.unlock()
+            return snapshot
+        }
+        lock.unlock()
+        
+        guard let data = try? Data(contentsOf: cacheFileUrl),
+              let cacheObj = try? JSONDecoder().decode(LocalLibraryCacheData.self, from: data) else {
+            return nil
+        }
+        guard cacheObj.version == LocalLibraryCacheData.currentVersion else {
+            try? FileManager.default.removeItem(at: cacheFileUrl)
+            return nil
+        }
+        
+        var albums: [Album] = []
+        albums.reserveCapacity(cacheObj.albums.count)
+        var allTracks: [Track] = []
+        var seenIds = Set<String>()
+        
+        for cachedAlbum in cacheObj.albums {
+            let tracks = cachedAlbum.tracks.map { $0.track }
+            albums.append(Album(
+                id: cachedAlbum.id,
+                title: cachedAlbum.title,
+                artist: cachedAlbum.artist,
+                artworkUrl: cachedAlbum.artworkUrlString.flatMap(URL.init(string:)),
+                tracks: tracks,
+                dateAdded: cachedAlbum.dateAdded
+            ))
+            for track in tracks where seenIds.insert(track.persistentId).inserted {
+                allTracks.append(track)
+            }
+        }
+        
+        var tracksById = [Int64: Track](minimumCapacity: allTracks.count)
+        for track in allTracks {
+            tracksById[track.id] = track
+        }
+        let playlists = cacheObj.playlists.map { playlist -> Playlist in
+            var p = playlist
+            p.tracks = playlist.songIds.compactMap { tracksById[$0] }
+            return p
+        }
+        
+        let result = (albums: albums, playlists: playlists, tracks: allTracks)
+        lock.lock()
+        snapshot = result
+        lock.unlock()
+        return result
+    }
+}
+
 // MARK: - Scanner
 
 /// Scans /var/mobile/Documents/AudioStreamMusic/ for audio files and builds
@@ -221,63 +396,56 @@ class LocalFileLibraryScanner {
         var cacheUpdated = false
         var foundCacheKeys = Set<String>()
 
-        func recurse(directory: URL) {
-            let fm = FileManager.default
-            guard let contents = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
-                return
-            }
-            for fileURL in contents {
-                var isDir: ObjCBool = false
-                if fm.fileExists(atPath: fileURL.path, isDirectory: &isDir) {
-                    if isDir.boolValue {
-                        recurse(directory: fileURL)
-                    } else {
-                        let ext = fileURL.pathExtension.lowercased()
-                        if audioExtensions.contains(ext) {
-                            let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
-                            let modDate = (attrs?[.modificationDate] as? Date) ?? Date(timeIntervalSince1970: 0)
-                            let size = (attrs?[.size] as? Int64) ?? 0
-                            let cacheKey = fileURL.path
-                            foundCacheKeys.insert(cacheKey)
-                            
-                            if let cached = persistentCache[cacheKey],
-                               cached.fileModificationDate == modDate,
-                               cached.fileSize == size {
-                                // Load from cache
-                                let rawHash = UInt64(bitPattern: Int64(truncatingIfNeeded: fileURL.path.hashValue))
-                                let safeId = Int64(bitPattern: rawHash & 0x7FFFFFFFFFFFFFFF)
-                                
-                                var track = Track(
-                                    id: safeId,
-                                    persistentId: cached.persistentId,
-                                    title: cached.title,
-                                    artist: cached.artist,
-                                    album: cached.album,
-                                    filename: cached.filename,
-                                    duration: cached.duration,
-                                    dateAdded: cached.fileModificationDate
-                                )
-                                track.albumArtist = cached.albumArtist
-                                track.trackNumber = cached.trackNumber ?? Track.extractTrackNumberFromFilename(cached.filename)
-                                track.streamUrl = fileURL
-                                if let artworkStr = cached.artworkUrlString {
-                                    track.artworkUrl = URL(string: artworkStr)
-                                }
-                                results.append(track)
-                            } else {
-                                // Full parse
-                                if let track = buildTrack(from: fileURL, modDate: modDate, size: size) {
-                                    results.append(track)
-                                    cacheUpdated = true
-                                }
-                            }
-                        }
+        let resourceKeys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]
+        if let enumerator = FileManager.default.enumerator(
+            at: Self.musicRoot,
+            includingPropertiesForKeys: resourceKeys,
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let fileURL as URL in enumerator {
+                let ext = fileURL.pathExtension.lowercased()
+                guard audioExtensions.contains(ext) else { continue }
+                
+                let values = try? fileURL.resourceValues(forKeys: Set(resourceKeys))
+                if values?.isRegularFile == false { continue }
+                let modDate = values?.contentModificationDate ?? Date(timeIntervalSince1970: 0)
+                let size = Int64(values?.fileSize ?? 0)
+                let cacheKey = fileURL.path
+                foundCacheKeys.insert(cacheKey)
+                
+                if let cached = persistentCache[cacheKey],
+                   cached.fileModificationDate == modDate,
+                   cached.fileSize == size {
+                    // Load from cache
+                    let rawHash = UInt64(bitPattern: Int64(truncatingIfNeeded: fileURL.path.hashValue))
+                    let safeId = Int64(bitPattern: rawHash & 0x7FFFFFFFFFFFFFFF)
+                    
+                    var track = Track(
+                        id: safeId,
+                        persistentId: cached.persistentId,
+                        title: cached.title,
+                        artist: cached.artist,
+                        album: cached.album,
+                        filename: cached.filename,
+                        duration: cached.duration,
+                        dateAdded: cached.fileModificationDate
+                    )
+                    track.albumArtist = cached.albumArtist
+                    track.trackNumber = cached.trackNumber ?? Track.extractTrackNumberFromFilename(cached.filename)
+                    track.streamUrl = fileURL
+                    if let artworkStr = cached.artworkUrlString {
+                        track.artworkUrl = URL(string: artworkStr)
+                    }
+                    results.append(track)
+                } else {
+                    // Full parse
+                    if let track = buildTrack(from: fileURL, modDate: modDate, size: size) {
+                        results.append(track)
+                        cacheUpdated = true
                     }
                 }
             }
         }
-
-        recurse(directory: Self.musicRoot)
 
         let staleKeys = persistentCache.keys.filter { !foundCacheKeys.contains($0) }
         if !staleKeys.isEmpty {

@@ -102,6 +102,11 @@ public class SimpleHTTPServer {
     private var noArtworkIds = Set<UInt64>()
     private let noArtworkLock = NSLock()
     
+    private var songsJSONCache: Data?
+    private let songsJSONLock = NSLock()
+    
+    private let libraryReadyCondition = NSCondition()
+    private var libraryReady = false
     private let serverQueue = DispatchQueue(label: "com.audiostream.httpserver", attributes: .concurrent)
     
     public init(
@@ -146,6 +151,36 @@ public class SimpleHTTPServer {
             noArtworkIds.removeAll()
             noArtworkLock.unlock()
         }
+    }
+    
+    /// Drops the serialized /api/songs payload. Call whenever the song list or
+    /// merge groups change so the next request rebuilds it.
+    public func invalidateSongsJSONCache() {
+        songsJSONLock.lock()
+        songsJSONCache = nil
+        songsJSONLock.unlock()
+    }
+    
+    /// Marks the initial library scan as complete. Requests for songs or
+    /// playlists wait for this instead of returning an empty list to clients
+    /// that connect while the daemon is still starting up.
+    public func markLibraryReady() {
+        libraryReadyCondition.lock()
+        libraryReady = true
+        libraryReadyCondition.broadcast()
+        libraryReadyCondition.unlock()
+    }
+    
+    private func waitForLibraryReady(timeout: TimeInterval = 30) -> Bool {
+        libraryReadyCondition.lock()
+        defer { libraryReadyCondition.unlock() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !libraryReady {
+            if !libraryReadyCondition.wait(until: deadline) {
+                break
+            }
+        }
+        return libraryReady
     }
     
     public func start() {
@@ -303,10 +338,12 @@ public class SimpleHTTPServer {
         case "/api/songs":
             if isForceRefresh {
                 rescanHandler?(true)
+                invalidateSongsJSONCache()
             }
             sendSongsJSON(clientSocket: clientSocket)
         case "/api/rescan", "/api/refresh":
             rescanHandler?(true)
+            invalidateSongsJSONCache()
             sendJSONResponse(jsonObject: [
                 "status": "ok",
                 "songsCount": songsCountProvider()
@@ -350,6 +387,7 @@ public class SimpleHTTPServer {
         
         let success = deleteHandler(type, json)
         if success {
+            invalidateSongsJSONCache()
             sendJSONResponse(jsonObject: ["success": true], status: "200 OK", clientSocket: clientSocket)
         } else {
             sendJSONResponse(jsonObject: ["success": false, "error": "Deletion failed"], status: "500 Internal Server Error", clientSocket: clientSocket)
@@ -407,6 +445,23 @@ public class SimpleHTTPServer {
     }
     
     private func sendSongsJSON(clientSocket: Int32) {
+        guard waitForLibraryReady() else {
+            sendServiceUnavailable(clientSocket: clientSocket)
+            return
+        }
+        // Touch the provider first: it refreshes merge-group revisions and
+        // invalidates the serialized cache when they changed.
+        _ = songsProvider()
+        
+        songsJSONLock.lock()
+        let cachedData = songsJSONCache
+        songsJSONLock.unlock()
+        
+        if let cachedData = cachedData {
+            sendJSONData(cachedData, clientSocket: clientSocket)
+            return
+        }
+        
         let songsWithDetails = songsProvider().map { song -> [String: Any] in
             var dict: [String: Any] = [
                 "id": song.id,
@@ -423,20 +478,30 @@ public class SimpleHTTPServer {
             return dict
         }
         
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: songsWithDetails),
-              let jsonString = String(data: jsonData, encoding: .utf8) else {
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: songsWithDetails) else {
             send500(clientSocket: clientSocket)
             return
         }
         
-        let response = "HTTP/1.1 200 OK\r\nServer: AudioStreamer\r\nContent-Type: application/json\r\nContent-Length: \(jsonString.utf8.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n\(jsonString)"
+        songsJSONLock.lock()
+        songsJSONCache = jsonData
+        songsJSONLock.unlock()
         
-        if let data = response.data(using: .utf8) {
-            sendData(data, clientSocket: clientSocket)
-        }
+        sendJSONData(jsonData, clientSocket: clientSocket)
+    }
+    
+    private func sendJSONData(_ jsonData: Data, clientSocket: Int32) {
+        let headers = "HTTP/1.1 200 OK\r\nServer: AudioStreamer\r\nContent-Type: application/json\r\nContent-Length: \(jsonData.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+        var response = headers.data(using: .utf8)!
+        response.append(jsonData)
+        sendData(response, clientSocket: clientSocket)
     }
     
     private func sendPlaylistsJSON(clientSocket: Int32) {
+        guard waitForLibraryReady() else {
+            sendServiceUnavailable(clientSocket: clientSocket)
+            return
+        }
         let encoder = JSONEncoder()
         if let jsonData = try? encoder.encode(playlistsProvider()) {
             let headers = "HTTP/1.1 200 OK\r\nServer: AudioStreamer\r\nContent-Type: application/json\r\nContent-Length: \(jsonData.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
@@ -717,6 +782,13 @@ public class SimpleHTTPServer {
     
     private func send500(clientSocket: Int32) {
         let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        if let data = response.data(using: .utf8) {
+            sendData(data, clientSocket: clientSocket)
+        }
+    }
+    
+    private func sendServiceUnavailable(clientSocket: Int32) {
+        let response = "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 2\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         if let data = response.data(using: .utf8) {
             sendData(data, clientSocket: clientSocket)
         }
