@@ -416,6 +416,8 @@ class AudioPlayerService: ObservableObject {
         }
         
         let playerItem = AVPlayerItem(url: url)
+        debugLog("loadTrack URL: \(url.absoluteString)")
+        
         
         // Notify player change if needed, or just replace current item
         // For AVPlayer, replaceCurrentItem is better if player exists
@@ -434,6 +436,12 @@ class AudioPlayerService: ObservableObject {
         stopObservingTime()
         
         play()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak playerItem] in
+            guard let self = self, let playerItem = playerItem else { return }
+            let current = CMTimeGetSeconds(self.player?.currentTime() ?? .zero)
+            self.debugLog("AVPlayer status: item=\(playerItem.status.rawValue) error=\(String(describing: playerItem.error)) timeControl=\(self.player?.timeControlStatus.rawValue ?? -1) reason=\(String(describing: self.player?.reasonForWaitingToPlay)) current=\(current)")
+        }
         
         // Observe for end of track to auto-advance
         NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
@@ -859,16 +867,18 @@ class AudioPlayerService: ObservableObject {
     private func handleShuffleAllCommand(attempt: Int = 0) {
         deletePendingCommandFile()
         print("[AudioReceiver] shuffleall: shuffling all songs (attempt \(attempt))")
+        debugLog("shuffleall attempt \(attempt)")
         
         let connectionService = ServerConnectionService()
         let service = MusicLibraryService(connectionService: connectionService)
         
-        service.fetchAllTracks()
+        service.fetchAllTracks(forceRefresh: true)
             .receive(on: DispatchQueue.main)
             .sink(
                 receiveCompletion: { [weak self] completion in
                     if case .failure(let err) = completion {
                         print("[AudioReceiver] shuffleall: failed to fetch tracks: \(err) (attempt \(attempt))")
+                        self?.debugLog("shuffleall fetch failed: \(err) (attempt \(attempt))")
                         // Cold launch via Home Screen quick action races library/
                         // server warmup — retry with delay so the second tap isn't needed.
                         guard attempt < 3 else { return }
@@ -881,6 +891,7 @@ class AudioPlayerService: ObservableObject {
                     guard let self = self else { return }
                     guard !allTracks.isEmpty else {
                         print("[AudioReceiver] shuffleall: no tracks found (attempt \(attempt))")
+                        self.debugLog("shuffleall empty (attempt \(attempt))")
                         guard attempt < 3 else { return }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                             self?.handleShuffleAllCommand(attempt: attempt + 1)
@@ -888,6 +899,7 @@ class AudioPlayerService: ObservableObject {
                         return
                     }
                     
+                    self.debugLog("shuffleall got \(allTracks.count) tracks")
                     let shuffledTracks = allTracks.shuffled()
                     self.state.isShuffleEnabled = true
                     self.play(tracks: shuffledTracks, startingAt: 0)

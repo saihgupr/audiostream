@@ -125,7 +125,7 @@ class RemoteLibraryDiskCache {
         
         func hydrate(_ track: Track) -> Track {
             var t = track
-            t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? track.filename)
+            t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)")
             t.artworkUrl = baseURL.appendingPathComponent("/artwork/\(track.persistentId)")
             return t
         }
@@ -186,8 +186,7 @@ class MusicLibraryService: ObservableObject {
         }
         
         return fetchRemoteTracks(forceRefresh: forceRefresh, baseURL: baseURL)
-            .map { [weak self] tracks -> [Album] in
-                guard let self = self else { return [] }
+            .map { tracks -> [Album] in
                 let hydrated = tracks.map { self.hydrate($0, baseURL: baseURL) }
                 return self.makeAlbums(from: hydrated, baseURL: baseURL)
             }
@@ -219,7 +218,7 @@ class MusicLibraryService: ObservableObject {
     
     private func hydrate(_ track: Track, baseURL: URL) -> Track {
         var t = track
-        t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? track.filename)
+        t.streamUrl = baseURL.appendingPathComponent("/music/\(track.filename)")
         t.artworkUrl = baseURL.appendingPathComponent("/artwork/\(track.persistentId)")
         return t
     }
@@ -370,8 +369,7 @@ class MusicLibraryService: ObservableObject {
             return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
         }
         return fetchRemoteTracks(forceRefresh: forceRefresh, baseURL: baseURL)
-            .map { [weak self] tracks in
-                guard let self = self else { return [] }
+            .map { tracks in
                 let updated = tracks.map { self.hydrate($0, baseURL: baseURL) }
                 let albumProcessed = AlbumMergeService.shared.process(tracks: updated)
                 return ArtistMergeService.shared.process(tracks: albumProcessed)

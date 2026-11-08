@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -168,15 +169,30 @@ func (s *Server) handleMusic(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	clean := filepath.Clean("/" + rel)
-	full := filepath.Join(s.musicDir, clean)
-	root := filepath.Clean(s.musicDir)
-	if full != root && !strings.HasPrefix(full, root+string(os.PathSeparator)) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
+	// The iOS app historically percent-encoded the path twice. net/http has
+	// already decoded it once, so try the decoded form as a fallback. This
+	// keeps older app builds working while new clients send a single encoding.
+	candidates := []string{rel}
+	if decoded, err := url.PathUnescape(rel); err == nil && decoded != rel {
+		candidates = append(candidates, decoded)
 	}
-	info, err := os.Stat(full)
-	if err != nil || info.IsDir() {
+
+	root := filepath.Clean(s.musicDir)
+	full := ""
+	for _, candidate := range candidates {
+		clean := filepath.Clean("/" + candidate)
+		candidateFull := filepath.Join(s.musicDir, clean)
+		if candidateFull != root && !strings.HasPrefix(candidateFull, root+string(os.PathSeparator)) {
+			continue
+		}
+		info, err := os.Stat(candidateFull)
+		if err == nil && !info.IsDir() {
+			full = candidateFull
+			break
+		}
+	}
+	if full == "" {
+		log.Printf("music not found: path=%q", r.URL.Path)
 		http.NotFound(w, r)
 		return
 	}
