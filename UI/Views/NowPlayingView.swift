@@ -774,8 +774,8 @@ struct NowPlayingView: View {
 private struct AirPlayButton: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
-        picker.activeTintColor = .systemBlue
-        picker.tintColor = UIColor.white.withAlphaComponent(0.85)
+        picker.activeTintColor = UIColor.white.withAlphaComponent(0.85)
+        picker.tintColor = UIColor.white.withAlphaComponent(0.35)
         picker.backgroundColor = .clear
         return picker
     }
