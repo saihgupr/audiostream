@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -103,6 +104,7 @@ func main() {
 	mux.HandleFunc("/api/rescan", s.handleRescan)
 	mux.HandleFunc("/api/refresh", s.handleRescan)
 	mux.HandleFunc("/api/delete", s.handleDelete)
+	mux.HandleFunc("/api/session", s.handleSession)
 	mux.HandleFunc("/music/", s.handleMusic)
 	mux.HandleFunc("/artwork/", s.handleArtwork)
 
@@ -182,6 +184,52 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	fmt.Fprint(w, `{"success":false,"error":"This library is a read-only mirror of the iPhone. Delete from the source device."}`)
+}
+
+// handleSession stores a playback handoff blob exactly as sent. The server
+// deliberately does not parse it: both apps share the schema, and keeping the
+// server schema-free means the payload can evolve without a server deploy.
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.dataDir, "handoff.json")
+
+	switch r.Method {
+	case http.MethodGet:
+		data, err := os.ReadFile(path)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"error":"no session"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+
+	case http.MethodPut, http.MethodPost:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil || len(body) == 0 {
+			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+			return
+		}
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, body, 0644); err != nil {
+			http.Error(w, `{"error":"write failed"}`, http.StatusInternalServerError)
+			return
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			http.Error(w, `{"error":"write failed"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+
+	case http.MethodDelete:
+		os.Remove(path)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleMusic(w http.ResponseWriter, r *http.Request) {

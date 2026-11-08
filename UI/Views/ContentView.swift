@@ -99,8 +99,10 @@ struct ContentView: View {
             }
         }
         .environmentObject(navManager)
+        .handoffOverlay()
         .onAppear {
             handlePendingQuickAction()
+            HandoffService.shared.startMonitoring(connection: connectionService)
         }
         .onReceive(quickActionManager.$pendingAction) { _ in
             handlePendingQuickAction()
