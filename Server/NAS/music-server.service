@@ -1,0 +1,13 @@
+[Unit]
+Description=AudioStream NAS HTTP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/music-server -music /music -data /var/lib/music-server -addr :18080
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

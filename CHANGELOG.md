@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **NAS Music Server**: added `Server/NAS`, a small Go HTTP server that serves the mirrored library from an always-on Proxmox LXC. The mirror is refreshed from the iPhone over rsync every 30 minutes, with a 30-day trash folder for deleted or replaced files.
 - **AirPlay Button in Now Playing**: Added a native AirPlay route picker (`AVRoutePickerView`) to `NowPlayingView` in a bottom utility row below the playback controls, matching Apple Music placement. Available in both portrait and landscape layouts, balanced with the volume slider toggle. The icon tints system blue while actively casting, matching native iOS behavior.
 - **Album Cover Art Downloader**: Long-press on the album cover in `AlbumDetailView` (including placeholder/grey covers) to open a context menu and download high-resolution album artwork.
   - Automatically searches Apple Music / iTunes and MusicBrainz APIs using clean artist and album metadata.

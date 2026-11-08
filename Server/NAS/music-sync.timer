@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the iPhone music mirror every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
