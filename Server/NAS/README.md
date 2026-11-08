@@ -68,10 +68,14 @@ From this directory run:
 ./deploy_nas.sh
 ```
 
-It builds the server, installs the server binary and `music-sync.sh` in the
-LXC, and installs the health script and timer on the Proxmox host. The
-health webhook URL is configured separately in `/etc/music-health.env` on
-the host.
+It builds the server for `linux/amd64`, installs the binary and `music-sync.sh`
+in the LXC, restarts `music-server`, and installs `music-health.sh` plus
+`music-health.timer` on the Proxmox host.
+
+The LXC needs `music-server.service`, `music-sync.service` and
+`music-sync.timer` installed once, and an SSH key that can reach the iPhone.
+The full setup (mounts, key, units, health environment) is in the main README
+under [NAS Music Server](../../README.md#nas-music-server-optional).
 
 ## Client
 
@@ -86,8 +90,8 @@ after switching. The iPhone daemon can stay configured as a fallback.
 
 While the app is pointed at the NAS it will not wake the iPhone streaming
 server or add `iphone.local` as a fallback. To use the iPhone again, set the
-server URL to `http://iphone.local:18080` and enable AudioStream auto-start in
-RemoteCompanion under Settings > Integrations.
+server URL to `http://iphone.local:18080` and turn on **Allow Auto-Start** in
+RemoteCompanion under Settings > Add-ons > AudioStream.
 
 ## Notes
 
