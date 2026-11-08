@@ -1,0 +1,108 @@
+{
+  "api": 1,
+  "id": "audiostream",
+  "name": "AudioStream",
+  "icon": "music.note",
+  "requires": ["{jbroot}/usr/bin/audiostream"],
+  "actions": [
+    {
+      "command": "shuffle",
+      "name": "Shuffle All Songs",
+      "icon": "shuffle",
+      "run": [
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "shuffle"] },
+        { "notify": "com.saihgupr.audiostream.shuffleall" }
+      ],
+      "banner": true
+    },
+    {
+      "command": "queue album",
+      "name": "Queue Current Album",
+      "icon": "music.note.list",
+      "run": [
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "queuealbum"] },
+        { "notify": "com.saihgupr.audiostream.queuealbum" }
+      ],
+      "banner": true
+    },
+    {
+      "command": "queue artist",
+      "name": "Queue Artist",
+      "icon": "music.mic",
+      "run": [
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "queueartist"] },
+        { "notify": "com.saihgupr.audiostream.queueartist" }
+      ],
+      "banner": true
+    },
+    {
+      "command": "delete current song",
+      "name": "Delete Currently Playing Song",
+      "icon": "trash",
+      "run": [
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "deletesong"] },
+        { "notify": "com.saihgupr.audiostream.deletesong" }
+      ],
+      "banner": true
+    },
+    {
+      "command": "playlist",
+      "name": "Play Playlist",
+      "icon": "music.note.list",
+      "input": { "title": "Playlist Name", "placeholder": "Recently Added" },
+      "run": [
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "playlist", "{input}"] },
+        { "notify": "com.saihgupr.audiostream.playplaylist" }
+      ],
+      "banner": true
+    },
+    {
+      "command": "start",
+      "name": "Start Streaming Server",
+      "icon": "play.circle.fill",
+      "run": [
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "start", "--auto-off"] }
+      ],
+      "banner": true
+    },
+    {
+      "command": "stop",
+      "name": "Stop Streaming Server",
+      "icon": "stop.circle.fill",
+      "run": [
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "stop"] }
+      ],
+      "banner": true
+    },
+    {
+      "command": "wake",
+      "name": "Wake for Remote Client",
+      "icon": "bolt.fill",
+      "run": [
+        { "defaults": { "domain": "com.saihgupr.audiostream.addon", "key": "autoStart", "read": true, "as": "autoStart" } },
+        { "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "start", "--auto-off"], "if": { "var": "autoStart", "is": "On" } }
+      ],
+      "banner": false
+    }
+  ],
+  "conditions": [
+    {
+      "id": "running",
+      "name": "AudioStream Server Running",
+      "type": "choice",
+      "exec": ["{jbroot}/bin/sh", "{jbroot}/usr/bin/audiostream", "is-running"],
+      "choices": { "1": "Running", "0": "Stopped" }
+    }
+  ],
+  "settings": [
+    {
+      "id": "autostart",
+      "title": "Allow Auto-Start",
+      "type": "switch",
+      "domain": "com.saihgupr.audiostream.addon",
+      "key": "autoStart",
+      "default": false,
+      "note": "Let RemoteCompanion wake the iPhone streaming server when a client asks."
+    }
+  ]
+}

@@ -12,6 +12,27 @@ fi
 
 LOG_PATH="/tmp/audiostreamer.log"
 
+launch_app() {
+    if command -v uiopen >/dev/null 2>&1; then
+        uiopen --bundleid com.saihgupr.audiostream >/dev/null 2>&1 || true
+    elif [ -x /var/jb/usr/bin/uiopen ]; then
+        /var/jb/usr/bin/uiopen --bundleid com.saihgupr.audiostream >/dev/null 2>&1 || true
+    elif command -v activator >/dev/null 2>&1; then
+        activator send com.saihgupr.audiostream >/dev/null 2>&1 || true
+    elif [ -x /var/jb/usr/bin/activator ]; then
+        /var/jb/usr/bin/activator send com.saihgupr.audiostream >/dev/null 2>&1 || true
+    elif [ -x /usr/bin/activator ]; then
+        /usr/bin/activator send com.saihgupr.audiostream >/dev/null 2>&1 || true
+    elif command -v sbdidlaunch >/dev/null 2>&1; then
+        sbdidlaunch com.saihgupr.audiostream >/dev/null 2>&1 || true
+    fi
+}
+
+send_pending_command() {
+    printf '%s' "$1" > /tmp/audiostream_pending_cmd
+    launch_app
+}
+
 case "$1" in
     start)
         # Kill any existing daemon & monitor to ensure clean port binding
@@ -121,8 +142,37 @@ EOF
             exit 1
         fi
         ;;
+    is-running)
+        if ps aux 2>/dev/null | grep -i '[a]udiostreamerd' | grep -v ' Z ' >/dev/null; then
+            echo 1
+        else
+            echo 0
+        fi
+        exit 0
+        ;;
+    shuffle)
+        send_pending_command "shuffleall"
+        ;;
+    queuealbum)
+        send_pending_command "queuealbum"
+        ;;
+    queueartist)
+        send_pending_command "queueartist"
+        ;;
+    deletesong)
+        send_pending_command "deletesong"
+        ;;
+    playlist)
+        if [ -z "${2:-}" ]; then
+            echo "Usage: audiostream playlist <name>"
+            exit 1
+        fi
+        printf 'playlist:%s' "$2" > /tmp/audiostream_pending_cmd
+        printf '%s' "$2" > /tmp/audiostream_pending_playlist
+        launch_app
+        ;;
     *)
-        echo "Usage: audiostream {start|stop|status} [--auto-off]"
+        echo "Usage: audiostream {start|stop|status|is-running|shuffle|queuealbum|queueartist|deletesong|playlist} [--auto-off]"
         exit 1
         ;;
 esac

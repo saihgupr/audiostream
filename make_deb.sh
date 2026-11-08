@@ -122,6 +122,17 @@ pack_flavor() {
     mkdir -p "$STAGING$INSTALL_DIR"
     cp -R "$APP_BUNDLE" "$STAGING$INSTALL_DIR/"
 
+    # RemoteCompanion add-on, so AudioStream actions and settings live in
+    # AudioStream's package instead of RemoteCompanion itself.
+    local ADDON_DIR
+    if [ "$FLAVOR" = "rootless" ]; then
+        ADDON_DIR="$STAGING/var/jb/Library/RemoteCompanion/AddOns"
+    else
+        ADDON_DIR="$STAGING/Library/RemoteCompanion/AddOns"
+    fi
+    mkdir -p "$ADDON_DIR"
+    cp "$PROJECT_ROOT/package/audiostream.json" "$ADDON_DIR/audiostream.json"
+
     # Control directory
     local CONTROL_DIR="$STAGING/DEBIAN"
     mkdir -p "$CONTROL_DIR"
@@ -156,7 +167,7 @@ PRERM
     if [ "$FLAVOR" = "rootless" ]; then
         (cd "$STAGING" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$DATA_TAR" var)
     else
-        (cd "$STAGING" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$DATA_TAR" Applications)
+        (cd "$STAGING" && COPYFILE_DISABLE=1 tar --format=ustar --no-xattrs --no-mac-metadata -czf "$DATA_TAR" Applications Library)
     fi
 
     # Assemble debian archive
