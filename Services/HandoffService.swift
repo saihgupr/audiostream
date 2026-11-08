@@ -16,6 +16,7 @@ final class HandoffService: ObservableObject {
     private var observer: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
     private var pollTask: Task<Void, Never>?
+    private var pauseTask: Task<Void, Never>?
     private var lastSeq: UInt64 = 0
     private var retryDelay: TimeInterval = 2
     private var dismissedID: String?
@@ -182,10 +183,25 @@ final class HandoffService: ObservableObject {
                 showStatus("Couldn't reach the server")
                 return
             }
-            player.pause()
             showStatus("Sent to \(HandoffDevice.isPad ? "iPhone" : "iPad")")
+
+            // Keep playing briefly so the other device has a moment to start
+            // before this one goes quiet, instead of a gap at the switch.
+            schedulePause(of: player)
         } catch {
             showStatus("Couldn't reach the server")
+        }
+    }
+
+    /// Stops this device a moment after the transfer, giving the receiving
+    /// device time to start so the switch isn't audible as a gap.
+    private func schedulePause(of player: AudioPlayerService) {
+        pauseTask?.cancel()
+        pauseTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            player.pause()
+            self?.pauseTask = nil
         }
     }
 
