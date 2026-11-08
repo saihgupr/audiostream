@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestPersistentIDStable(t *testing.T) {
 	first := persistentID("Album/01 - Song.m4a")
@@ -69,5 +76,31 @@ func TestApplyMergeToTrack(t *testing.T) {
 	}
 	if got.Artist != "Bodhi" {
 		t.Fatalf("artist = %q, want %q", got.Artist, "Bodhi")
+	}
+}
+
+func TestHandleStatusIncludesLastSync(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sync-status.json"), []byte(`{"result":"ok","lastSuccess":"2026-11-08T19:19:51Z"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{dataDir: dir, entries: []CacheEntry{{}, {}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	rec := httptest.NewRecorder()
+	s.handleStatus(rec, req)
+
+	var got struct {
+		Status   string         `json:"status"`
+		Songs    int            `json:"songsCount"`
+		LastSync map[string]any `json:"lastSync"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got.Status != "ok" || got.Songs != 2 {
+		t.Fatalf("unexpected status: %+v", got)
+	}
+	if got.LastSync["result"] != "ok" {
+		t.Fatalf("lastSync missing or wrong: %+v", got.LastSync)
 	}
 }

@@ -416,8 +416,6 @@ class AudioPlayerService: ObservableObject {
         }
         
         let playerItem = AVPlayerItem(url: url)
-        debugLog("loadTrack URL: \(url.absoluteString)")
-        
         
         // Notify player change if needed, or just replace current item
         // For AVPlayer, replaceCurrentItem is better if player exists
@@ -436,12 +434,6 @@ class AudioPlayerService: ObservableObject {
         stopObservingTime()
         
         play()
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak playerItem] in
-            guard let self = self, let playerItem = playerItem else { return }
-            let current = CMTimeGetSeconds(self.player?.currentTime() ?? .zero)
-            self.debugLog("AVPlayer status: item=\(playerItem.status.rawValue) error=\(String(describing: playerItem.error)) timeControl=\(self.player?.timeControlStatus.rawValue ?? -1) reason=\(String(describing: self.player?.reasonForWaitingToPlay)) current=\(current)")
-        }
         
         // Observe for end of track to auto-advance
         NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)

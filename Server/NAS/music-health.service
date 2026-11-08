@@ -1,0 +1,8 @@
+[Unit]
+Description=Check AudioStream NAS health and notify Home Assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/music-health.sh

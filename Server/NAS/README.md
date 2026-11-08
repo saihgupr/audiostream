@@ -16,6 +16,7 @@ server URL is the only client change.
 ## Endpoints
 
 - `GET /api/ping`
+- `GET /api/status` (adds the last sync result from `sync-status.json`)
 - `GET /api/songs` (add `?refresh=true` to rescan first)
 - `GET /api/playlists` (empty; the iOS app generates Recently Added and the
   other date playlists itself)
@@ -35,21 +36,42 @@ inside the same LXC. The script is `/usr/local/bin/music-sync.sh`.
   replaced files are recoverable for 30 days.
 - Refuses to run if the iPhone is unreachable or reports fewer than 100 files.
 - `--iconv=UTF-8,UTF-8-MAC` normalizes macOS filenames.
+- Writes `/var/lib/music-server/sync-status.json` on every attempt with the
+  result, file counts, free space, and the last success time.
+
+## Monitoring
+
+`music-health.timer` runs on the Proxmox host every 5 minutes and checks
+`http://192.168.1.210:18080/api/status`. It posts a notification to Home
+Assistant through a local-only webhook when:
+
+- the server does not respond,
+- the last sync failed (rsync, low space, or a too-small remote library),
+- the sync timer has not run for 90 minutes,
+- no sync has succeeded for 24 hours,
+- the server sees fewer than 100 songs,
+- the share has less than 10 GB free.
+
+The webhook URL lives in `/etc/music-health.env` on the Proxmox host (mode
+600) and is not stored in this repository. Alerts repeat at most once every
+6 hours for the same condition. The matching Home Assistant automation is
+`automation.audiostream_nas_alert`.
 
 The LXC needs the sync user's SSH key in the iPhone's
 `~/.ssh/authorized_keys`. The key is `/root/.ssh/id_ed25519` inside the LXC.
 
 ## Build and deploy
 
-From this directory:
+From this directory run:
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o build/music-server .
-scp build/music-server proxmox:/tmp/music-server
-ssh proxmox 'pct exec 110 -- systemctl stop music-server || true; pct push 110 /tmp/music-server /usr/local/bin/music-server --perms 755; pct exec 110 -- systemctl start music-server'
+./deploy_nas.sh
 ```
 
-Or run `./deploy_nas.sh`.
+It builds the server, installs the server binary and `music-sync.sh` in the
+LXC, and installs the health script and timer on the Proxmox host. The
+health webhook URL is configured separately in `/etc/music-health.env` on
+the host.
 
 ## Client
 

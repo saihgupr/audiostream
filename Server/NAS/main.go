@@ -97,7 +97,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/api/ping", s.handlePing)
-	mux.HandleFunc("/api/status", s.handlePing)
+	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/songs", s.handleSongs)
 	mux.HandleFunc("/api/playlists", s.handlePlaylists)
 	mux.HandleFunc("/api/rescan", s.handleRescan)
@@ -129,6 +129,27 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	data := s.pingJSON
 	s.mu.RUnlock()
 	writeJSON(w, data)
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	songs := len(s.entries)
+	s.mu.RUnlock()
+
+	status := map[string]any{
+		"status":         "ok",
+		"songsCount":     songs,
+		"playlistsCount": 0,
+		"version":        "1.0.0",
+	}
+	if data, err := os.ReadFile(filepath.Join(s.dataDir, "sync-status.json")); err == nil {
+		var lastSync map[string]any
+		if json.Unmarshal(data, &lastSync) == nil {
+			status["lastSync"] = lastSync
+		}
+	}
+	body, _ := json.Marshal(status)
+	writeJSON(w, body)
 }
 
 func (s *Server) handleSongs(w http.ResponseWriter, r *http.Request) {
