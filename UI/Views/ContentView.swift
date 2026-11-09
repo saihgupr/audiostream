@@ -99,8 +99,14 @@ struct ContentView: View {
             }
         }
         .environmentObject(navManager)
+        .handoffOverlay()
+        .onOpenURL { url in
+            guard url.scheme?.lowercased() == "audiostream", url.host == "handoff" else { return }
+            Task { await HandoffService.shared.send(from: audioService) }
+        }
         .onAppear {
             handlePendingQuickAction()
+            HandoffService.shared.startMonitoring(connection: connectionService, player: audioService)
         }
         .onReceive(quickActionManager.$pendingAction) { _ in
             handlePendingQuickAction()

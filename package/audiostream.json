@@ -6,6 +6,15 @@
   "requires": ["{jbroot}/usr/bin/audiostream"],
   "actions": [
     {
+      "command": "transfer",
+      "name": "Transfer Playback",
+      "icon": "arrow.up.right.circle.fill",
+      "run": [
+        { "url": "audiostream://handoff" }
+      ],
+      "banner": true
+    },
+    {
       "command": "shuffle",
       "name": "Shuffle All Songs",
       "icon": "shuffle",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -71,6 +72,10 @@ type Server struct {
 	pingJSON  []byte
 
 	scanMu sync.Mutex
+
+	sessionMu  sync.Mutex
+	sessionCh  chan struct{}
+	sessionSeq uint64
 }
 
 func main() {
@@ -86,7 +91,7 @@ func main() {
 		log.Fatalf("artwork dir: %v", err)
 	}
 
-	s := &Server{musicDir: *musicDir, dataDir: *dataDir}
+	s := &Server{musicDir: *musicDir, dataDir: *dataDir, sessionCh: make(chan struct{})}
 	if !s.loadCache() {
 		s.scan()
 	} else {
@@ -103,6 +108,7 @@ func main() {
 	mux.HandleFunc("/api/rescan", s.handleRescan)
 	mux.HandleFunc("/api/refresh", s.handleRescan)
 	mux.HandleFunc("/api/delete", s.handleDelete)
+	mux.HandleFunc("/api/session", s.handleSession)
 	mux.HandleFunc("/music/", s.handleMusic)
 	mux.HandleFunc("/artwork/", s.handleArtwork)
 
@@ -182,6 +188,104 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	fmt.Fprint(w, `{"success":false,"error":"This library is a read-only mirror of the iPhone. Delete from the source device."}`)
+}
+
+// handleSession stores a playback handoff blob exactly as sent. The server
+// deliberately does not parse it: both apps share the schema, and keeping the
+// server schema-free means the payload can evolve without a server deploy.
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		// A seq parameter turns the read into a long poll: hold the
+		// connection until the session changes, so the other device sees a
+		// handoff immediately instead of waiting for its next poll tick.
+		if r.URL.Query().Get("seq") != "" {
+			s.waitForSession(w, r)
+			return
+		}
+		s.writeSession(w)
+
+	case http.MethodPut, http.MethodPost:
+		path := filepath.Join(s.dataDir, "handoff.json")
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil || len(body) == 0 {
+			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+			return
+		}
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, body, 0644); err != nil {
+			http.Error(w, `{"error":"write failed"}`, http.StatusInternalServerError)
+			return
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			http.Error(w, `{"error":"write failed"}`, http.StatusInternalServerError)
+			return
+		}
+		s.notifySession()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+
+	case http.MethodDelete:
+		os.Remove(filepath.Join(s.dataDir, "handoff.json"))
+		s.notifySession()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) notifySession() {
+	s.sessionMu.Lock()
+	s.sessionSeq++
+	close(s.sessionCh)
+	s.sessionCh = make(chan struct{})
+	s.sessionMu.Unlock()
+}
+
+func (s *Server) currentSessionSeq() uint64 {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	return s.sessionSeq
+}
+
+func (s *Server) waitForSession(w http.ResponseWriter, r *http.Request) {
+	seq, _ := strconv.ParseUint(r.URL.Query().Get("seq"), 10, 64)
+
+	s.sessionMu.Lock()
+	ch := s.sessionCh
+	current := s.sessionSeq
+	s.sessionMu.Unlock()
+
+	if seq == current {
+		timer := time.NewTimer(25 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ch:
+		case <-timer.C:
+			w.Header().Set("X-Session-Seq", strconv.FormatUint(current, 10))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
+
+	s.writeSession(w)
+}
+
+func (s *Server) writeSession(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Session-Seq", strconv.FormatUint(s.currentSessionSeq(), 10))
+
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "handoff.json"))
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":"no session"}`)
+		return
+	}
+	w.Write(data)
 }
 
 func (s *Server) handleMusic(w http.ResponseWriter, r *http.Request) {

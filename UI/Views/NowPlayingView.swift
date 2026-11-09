@@ -325,17 +325,15 @@ struct NowPlayingView: View {
                                     Spacer()
 
                                     Button(action: {
-                                        withAnimation(.easeInOut(duration: 0.15)) {
-                                            showVolumeSlider.toggle()
-                                        }
+                                        Task { await HandoffService.shared.send(from: audioService) }
                                     }) {
-                                        Image(systemName: showVolumeSlider ? "speaker.wave.3.fill" : "speaker.fill")
+                                        Image(systemName: HandoffDevice.isPad ? "iphone" : "ipad")
                                             .font(.system(size: 20, weight: .semibold))
-                                            .foregroundColor(showVolumeSlider ? Color.white.opacity(0.85) : Color.white.opacity(0.35))
+                                            .foregroundColor(.white.opacity(0.85))
                                             .frame(width: 44, height: 44)
                                             .contentShape(Rectangle())
                                     }
-                                    .accessibilityLabel("Volume Slider")
+                                    .accessibilityLabel(HandoffDevice.isPad ? "Play on iPhone" : "Play on iPad")
                                 }
 
                                 Spacer()
@@ -556,17 +554,15 @@ struct NowPlayingView: View {
                                         Spacer()
 
                                         Button(action: {
-                                            withAnimation(.easeInOut(duration: 0.15)) {
-                                                showVolumeSlider.toggle()
-                                            }
+                                            Task { await HandoffService.shared.send(from: audioService) }
                                         }) {
-                                            Image(systemName: showVolumeSlider ? "speaker.wave.3.fill" : "speaker.fill")
+                                            Image(systemName: HandoffDevice.isPad ? "iphone" : "ipad")
                                                 .font(.system(size: 20, weight: .semibold))
-                                                .foregroundColor(showVolumeSlider ? Color.white.opacity(0.85) : Color.white.opacity(0.35))
+                                                .foregroundColor(.white.opacity(0.85))
                                                 .frame(width: 44, height: 44)
                                                 .contentShape(Rectangle())
                                         }
-                                        .accessibilityLabel("Volume Slider")
+                                        .accessibilityLabel(HandoffDevice.isPad ? "Play on iPhone" : "Play on iPad")
                                     }
                                     .padding(.horizontal, 32)
 
@@ -743,6 +739,7 @@ struct NowPlayingView: View {
             }
         }
         .background(Color.black.edgesIgnoringSafeArea(.all))
+        .handoffOverlay()
         .alert(isPresented: $showTrackDeleteConfirmation) {
             Alert(
                 title: Text("Delete Song"),
@@ -774,8 +771,8 @@ struct NowPlayingView: View {
 private struct AirPlayButton: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
-        picker.activeTintColor = .systemBlue
-        picker.tintColor = UIColor.white.withAlphaComponent(0.85)
+        picker.activeTintColor = UIColor.white.withAlphaComponent(0.85)
+        picker.tintColor = UIColor.white.withAlphaComponent(0.35)
         picker.backgroundColor = .clear
         return picker
     }

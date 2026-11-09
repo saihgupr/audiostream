@@ -15,6 +15,9 @@
 		3EC2E1EAD35D953737B19E32 /* NavigationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF783CE050941BD671121AB7 /* NavigationManager.swift */; };
 		505366AE9087C7F09CB1BF64 /* AlbumMergeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B0D4C4EFC0A8C9334BA32 /* AlbumMergeService.swift */; };
 		535866131AE61E2E7B9E8001 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4EC156A523FAC0E4245A17E /* NowPlayingView.swift */; };
+		5B2C3D4E5F60718293A4B5C6 /* HandoffState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1B2C3D4E5F60718293A4B5 /* HandoffState.swift */; };
+		7D4E5F60718293A4B5C6D7E8 /* HandoffService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C3D4E5F60718293A4B5C6D7 /* HandoffService.swift */; };
+		9F60718293A4B5C6D7E8F901 /* HandoffOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E5F60718293A4B5C6D7E8F9 /* HandoffOverlay.swift */; };
 		6516FFCCF2ED71EE7319B455 /* ArtistMergeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6626C77E404CACF36B9AB455 /* ArtistMergeService.swift */; };
 		7116396CC90D397260D6CE9C /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E086B987176CABB31931EF9D /* LaunchScreen.storyboard */; };
 		75CB7B3CC1C29BE67730941D /* PlaylistArtworkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A706B90351DECC5C5EA86 /* PlaylistArtworkView.swift */; };
@@ -68,6 +71,9 @@
 		B1D57E6EE7CBF4B9189B3D8E /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C06601F0925DAC5276EB362A /* LocalFileLibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalFileLibraryScanner.swift; sourceTree = "<group>"; };
 		C4EC156A523FAC0E4245A17E /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
+		4A1B2C3D4E5F60718293A4B5 /* HandoffState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffState.swift; sourceTree = "<group>"; };
+		6C3D4E5F60718293A4B5C6D7 /* HandoffService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffService.swift; sourceTree = "<group>"; };
+		8E5F60718293A4B5C6D7E8F9 /* HandoffOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffOverlay.swift; sourceTree = "<group>"; };
 		CCD93DC82E149A2CF77E359A /* AlbumCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumCard.swift; sourceTree = "<group>"; };
 		CF783CE050941BD671121AB7 /* NavigationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationManager.swift; sourceTree = "<group>"; };
 		D050A3F9571FDCD100EE6920 /* AlbumDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumDetailView.swift; sourceTree = "<group>"; };
@@ -131,6 +137,7 @@
 				03EC5B6793451C725FE17F6D /* MusicServerManager.swift */,
 				CF783CE050941BD671121AB7 /* NavigationManager.swift */,
 				00564993F5AE33F65FCCB857 /* ServerConnectionService.swift */,
+				6C3D4E5F60718293A4B5C6D7 /* HandoffService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -142,6 +149,7 @@
 				495B4AF9B214A4582DD88ECD /* AlbumMergeSheet.swift */,
 				178747B208D44DF4C1A0BE15 /* ArtistMergeSheet.swift */,
 				246B47B1281D616CA2C0D595 /* BlurView.swift */,
+				8E5F60718293A4B5C6D7E8F9 /* HandoffOverlay.swift */,
 				2D33C311F9C555989A989779 /* CustomTabBar.swift */,
 				731B94D53C25E1911EB981BC /* MiniPlayerView.swift */,
 				DD8A706B90351DECC5C5EA86 /* PlaylistArtworkView.swift */,
@@ -192,6 +200,7 @@
 			isa = PBXGroup;
 			children = (
 				687FFEAF52EED6FF10F668DB /* Models.swift */,
+				4A1B2C3D4E5F60718293A4B5 /* HandoffState.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -277,6 +286,7 @@
 				E2AC0E1AAF8791CB72536C5A /* ArtistMergeSheet.swift in Sources */,
 				B362AF698FCAC15B86B45ACF /* ArtworkDownloadService.swift in Sources */,
 				E81168438AEE5C0EE026C8E9 /* AudioPlayerService.swift in Sources */,
+				7D4E5F60718293A4B5C6D7E8 /* HandoffService.swift in Sources */,
 				B1AA1F9CEA3D7CF7742CBC2A /* AudioStreamApp.swift in Sources */,
 				A13255E7FEBA65B2C4581B27 /* BlurView.swift in Sources */,
 				CCDA9FAC3A80764331130348 /* ContentView.swift in Sources */,
@@ -286,6 +296,8 @@
 				80E962C7FD67ABA6F1E2EA38 /* MergeManagementView.swift in Sources */,
 				F257AC66EE9C68423EB54C48 /* MiniPlayerView.swift in Sources */,
 				8180F14024E8272F3680A0B9 /* Models.swift in Sources */,
+				5B2C3D4E5F60718293A4B5C6 /* HandoffState.swift in Sources */,
+				9F60718293A4B5C6D7E8F901 /* HandoffOverlay.swift in Sources */,
 				B69189906E5801D950223C45 /* MusicLibraryService.swift in Sources */,
 				1427A13B1A362B7AF8941D87 /* MusicMigrationService.swift in Sources */,
 				11E099620CDEE15AB7D984B9 /* MusicServerManager.swift in Sources */,

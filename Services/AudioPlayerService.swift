@@ -464,6 +464,52 @@ class AudioPlayerService: ObservableObject {
         player?.seek(to: CMTime(seconds: time, preferredTimescale: 1))
         updateNowPlayingInfo()
     }
+
+    /// Precise playback position for session handoff. `state.currentTime` only
+    /// updates once per second, which is audible on track boundaries.
+    func currentPlaybackPosition() -> TimeInterval {
+        if let seconds = player?.currentTime().seconds, seconds.isFinite, seconds >= 0 {
+            return seconds
+        }
+        return state.currentTime
+    }
+
+    /// Restores a session received from another device. Bypasses
+    /// `play(tracks:startingAt:)` on purpose: that resets repeat mode and
+    /// re-shuffles, which would break the transferred queue order.
+    func applyHandoff(
+        queue: [Track],
+        index: Int,
+        position: TimeInterval,
+        shuffle: Bool,
+        repeatMode: RepeatMode,
+        autoplay: Bool
+    ) {
+        guard !queue.isEmpty, index >= 0, index < queue.count else { return }
+
+        originalQueue = queue
+        self.queue = queue
+        queueIndex = index
+        queuedAlbumTitles.removeAll()
+        state.isShuffleEnabled = shuffle
+        state.repeatMode = repeatMode
+
+        loadTrack(at: index)
+
+        if position > 0 {
+            player?.seek(
+                to: CMTime(seconds: position, preferredTimescale: 1),
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+            state.currentTime = position
+        }
+
+        if !autoplay {
+            pause()
+        }
+        updateNowPlayingInfo()
+    }
     
     func pause() {
         player?.pause()

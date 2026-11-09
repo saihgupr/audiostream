@@ -41,6 +41,9 @@ targets:
         "UISupportedInterfaceOrientations~ipad": [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppleMusicUsageDescription: "This app needs access to your music library to play songs."
         UIBackgroundModes: [audio]
+        CFBundleURLTypes:
+          - CFBundleURLName: com.saihgupr.audiostream
+            CFBundleURLSchemes: [audiostream]
         UIApplicationShortcutItems:
           - UIApplicationShortcutItemType: com.saihgupr.audiostream.quickaction.shuffleall
             UIApplicationShortcutItemTitle: Shuffle All Songs
