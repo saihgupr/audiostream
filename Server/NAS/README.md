@@ -15,6 +15,7 @@ server URL is the only client change.
 
 ## Endpoints
 
+- `GET /` (the player UI, same page the iPhone daemon serves)
 - `GET /api/ping`
 - `GET /api/status` (adds the last sync result from `sync-status.json`)
 - `GET /api/songs` (add `?refresh=true` to rescan first)
@@ -24,6 +25,24 @@ server URL is the only client change.
 - `GET /music/<relative-path>` with HTTP Range support
 - `GET /artwork/<persistentId>` with embedded/folder artwork
 - `DELETE` is not supported. The iPhone remains the source of truth.
+
+`/` and `/api/songs` are served gzipped when the client accepts it. Both bodies
+are precomputed (page at startup, library after each scan), so no compression
+work happens per request.
+
+## Player UI
+
+`web/index.html` is generated from `Server/Core/MusicServerHTML.swift` by
+`sync_web_ui.sh`, so both servers serve the same page. Edit the Swift file,
+then run:
+
+```bash
+cd Server/NAS && ./sync_web_ui.sh
+```
+
+`go test` fails if the two differ. The delete button in the UI posts to
+`/api/delete`, which this server rejects with a 403 because the mirror is
+read-only.
 
 ## Sync
 

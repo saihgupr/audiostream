@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	_ "embed"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
@@ -20,6 +23,14 @@ import (
 
 	"github.com/dhowden/tag"
 )
+
+// webIndex is the player UI, generated from Server/Core/MusicServerHTML.swift
+// by sync_web_ui.sh so both servers serve the same page.
+//
+//go:embed web/index.html
+var webIndex []byte
+
+var webIndexGzip = gzipBytes(webIndex)
 
 const (
 	libraryVersion = 1
@@ -68,6 +79,7 @@ type Server struct {
 	byPID     map[uint64]*CacheEntry
 	byID      map[int64]*CacheEntry
 	songsJSON []byte
+	songsGzip []byte
 	pingJSON  []byte
 
 	scanMu sync.Mutex
@@ -120,8 +132,9 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintln(w, "AudioStream NAS is running.")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	writeCompressed(w, r, webIndex, webIndexGzip)
 }
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
@@ -158,8 +171,11 @@ func (s *Server) handleSongs(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RLock()
 	data := s.songsJSON
+	gz := s.songsGzip
 	s.mu.RUnlock()
-	writeJSON(w, data)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	writeCompressed(w, r, data, gz)
 }
 
 func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
@@ -349,6 +365,45 @@ func writeJSON(w http.ResponseWriter, data []byte) {
 	w.Write(data)
 }
 
+// writeCompressed writes body, using the precomputed gzip copy when the client
+// accepts it. Both bodies are built once at startup or scan time, so serving a
+// request costs no compression work.
+func writeCompressed(w http.ResponseWriter, r *http.Request, body, gzipped []byte) {
+	w.Header().Add("Vary", "Accept-Encoding")
+	if len(gzipped) > 0 && acceptsGzip(r) {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", strconv.Itoa(len(gzipped)))
+		w.Write(gzipped)
+		return
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.Write(body)
+}
+
+func acceptsGzip(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		if strings.TrimSpace(strings.SplitN(part, ";", 2)[0]) == "gzip" {
+			return true
+		}
+	}
+	return false
+}
+
+func gzipBytes(data []byte) []byte {
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil
+	}
+	if _, err := zw.Write(data); err != nil {
+		return nil
+	}
+	if err := zw.Close(); err != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
 func (s *Server) periodicScan(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -486,6 +541,7 @@ func (s *Server) rebuild(entries []CacheEntry) {
 	s.byPID = byPID
 	s.byID = byID
 	s.songsJSON = songsJSON
+	s.songsGzip = gzipBytes(songsJSON)
 	s.pingJSON = pingJSON
 	s.mu.Unlock()
 }
