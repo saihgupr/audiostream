@@ -43,27 +43,34 @@ struct NowPlayingView: View {
             
             GeometryReader { geometry in
                 let screenHeight = geometry.size.height
+                let showsHeader = UIDevice.current.userInterfaceIdiom == .pad || geometry.size.width > geometry.size.height
+                let contentHeight = screenHeight - (showsHeader ? 50 : 0)
+                // Music sizes the artwork to the width; cap it by what is left after
+                // the controls so nothing has to scroll on shorter phones.
+                let artworkSide = min(geometry.size.width - 52, contentHeight - 324)
                 
                 VStack(spacing: 0) {
-                    // Header (Dismiss button) - Fixed at top
-                    HStack {
-                        Button(action: {
+                    // Header (Dismiss button) - iPhone portrait uses the sheet grabber, like Music
+                    if showsHeader {
+                        HStack {
+                            Button(action: {
+                                withAnimation {
+                                    expand = false
+                                }
+                            }) {
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .padding()
+                            }
+                            Spacer()
+                        }
+                        .frame(height: 50)
+                        .contentShape(Rectangle())
+                        .ipadSwipeDownGesture {
                             withAnimation {
                                 expand = false
                             }
-                        }) {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 24))
-                                .foregroundColor(.white.opacity(0.8))
-                                .padding()
-                        }
-                        Spacer()
-                    }
-                    .frame(height: 50)
-                    .contentShape(Rectangle())
-                    .ipadSwipeDownGesture {
-                        withAnimation {
-                            expand = false
                         }
                     }
                     
@@ -334,7 +341,7 @@ struct NowPlayingView: View {
                             }
                             .padding(.trailing, 40)
                         }
-                        .frame(width: geometry.size.width, height: screenHeight - 50)
+                        .frame(width: geometry.size.width, height: contentHeight)
                     } else {
                         ScrollView(.vertical, showsIndicators: false) {
                             VStack(spacing: 0) {
@@ -347,32 +354,30 @@ struct NowPlayingView: View {
                                 
                                 // Main content taking up full visible height
                                 VStack {
-                                    Spacer(minLength: 10)
-                                    
-                                    // Artwork - Maximize size with high priority
+                                    Spacer().frame(height: 22)
+
+                                    // Artwork
                                     Group {
                                         if let artworkUrl = audioService.state.currentTrack?.artworkUrl {
                                             RemoteImage(url: artworkUrl)
-                                                .aspectRatio(1.0, contentMode: .fit)
-                                                .cornerRadius(12)
+                                                .frame(width: artworkSide, height: artworkSide)
+                                                .clipShape(RoundedRectangle(cornerRadius: 10))
                                                 // Keep the artwork's depth below it so its shadow does not
                                                 // darken the backdrop behind the fixed Now Playing header.
                                                 .shadow(color: Color.black.opacity(0.35), radius: 12, x: 0, y: 8)
                                         } else {
                                             Rectangle()
                                                 .fill(Color.gray.opacity(0.3))
-                                                .aspectRatio(1.0, contentMode: .fit)
+                                                .frame(width: artworkSide, height: artworkSide)
                                                 .overlay(
                                                     Image(systemName: "music.note")
                                                         .font(.system(size: 60))
                                                         .foregroundColor(.white)
                                                 )
-                                                .cornerRadius(12)
+                                                .clipShape(RoundedRectangle(cornerRadius: 10))
                                                 .shadow(color: Color.black.opacity(0.35), radius: 12, x: 0, y: 8)
                                         }
                                     }
-                                    .layoutPriority(1) // Ensure artwork gets space first
-                                    .padding(.horizontal, 10)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         if let track = audioService.state.currentTrack {
@@ -380,105 +385,104 @@ struct NowPlayingView: View {
                                             withAnimation { expand = false }
                                         }
                                     }
-                                    
-                                    Spacer(minLength: 20)
-                                    
-                                    // Info + Scrub Bar group
-                                    VStack(spacing: 16) {
-                                        // Info
-                                        HStack(alignment: .center) {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(audioService.state.currentTrack?.title ?? "Not Playing")
-                                                    .font(.title2)
-                                                    .bold()
-                                                    .foregroundColor(.white)
-                                                    .multilineTextAlignment(.leading)
 
-                                                HStack(spacing: 0) {
-                                                    let artistParts = (audioService.state.currentTrack?.artist ?? "Select Music").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+                                    Spacer().frame(height: 26)
 
-                                                    ForEach(artistParts.indices, id: \.self) { index in
-                                                        let artist = artistParts[index]
-                                                        Text(artist)
+                                    // Info
+                                    HStack(alignment: .center) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(audioService.state.currentTrack?.title ?? "Not Playing")
+                                                .font(.title2)
+                                                .bold()
+                                                .foregroundColor(.white)
+                                                .multilineTextAlignment(.leading)
+                                                .lineLimit(2)
+
+                                            HStack(spacing: 0) {
+                                                let artistParts = (audioService.state.currentTrack?.artist ?? "Select Music").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+
+                                                ForEach(artistParts.indices, id: \.self) { index in
+                                                    let artist = artistParts[index]
+                                                    Text(artist)
+                                                        .font(.body)
+                                                        .foregroundColor(.gray)
+                                                        .onTapGesture {
+                                                            navManager.navigateToArtist(name: artist)
+                                                            withAnimation { expand = false }
+                                                        }
+
+                                                    if index < artistParts.count - 1 {
+                                                        Text(", ")
                                                             .font(.body)
                                                             .foregroundColor(.gray)
-                                                            .onTapGesture {
-                                                                navManager.navigateToArtist(name: artist)
-                                                                withAnimation { expand = false }
-                                                            }
-
-                                                        if index < artistParts.count - 1 {
-                                                            Text(", ")
-                                                                .font(.body)
-                                                                .foregroundColor(.gray)
-                                                        }
                                                     }
                                                 }
                                             }
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                                            menuButton
+                                            .lineLimit(1)
                                         }
-                                        .padding(.horizontal, 24)
-                                        
-                                        // Scrub Bar
-                                        VStack(spacing: 0) {
-                                            GeometryReader { geometry in
-                                                ZStack(alignment: .leading) {
-                                                    // Hit Zone
-                                                    Rectangle()
-                                                        .fill(Color.black.opacity(0.001))
-                                                        .frame(width: geometry.size.width, height: 40)
-                                                    
-                                                    // Visible Track background
-                                                    Rectangle()
-                                                        .fill(Color.white.opacity(0.2))
-                                                        .frame(width: geometry.size.width, height: 4)
-                                                    
-                                                    // Active progress
-                                                    Rectangle()
-                                                        .fill(Color.white)
-                                                        .frame(width: geometry.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)), height: 4)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                                                    Circle()
-                                                        .fill(Color.white)
-                                                        .frame(width: 8, height: 8)
-                                                        .offset(x: geometry.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)) - 4)
-                                                }
-                                                .contentShape(Rectangle())
-                                                .gesture(
-                                                    DragGesture(minimumDistance: 0)
-                                                        .onChanged { value in
-                                                            isScrubbing = true
-                                                            let percentage = min(max(0, Double(value.location.x / geometry.size.width)), 1.0)
-                                                            let newTime = percentage * (audioService.state.currentTrack?.duration ?? 0)
-                                                            audioService.state.currentTime = newTime
-                                                        }
-                                                        .onEnded { value in
-                                                            let percentage = min(max(0, Double(value.location.x / geometry.size.width)), 1.0)
-                                                            let newTime = percentage * (audioService.state.currentTrack?.duration ?? 0)
-                                                            audioService.seek(to: newTime)
-                                                            isScrubbing = false
-                                                        }
-                                                )
-                                            }
-                                            .frame(height: 40)
-                                            
-                                            HStack {
-                                                Text(formatDuration(audioService.state.currentTime))
-                                                    .font(.caption2)
-                                                    .foregroundColor(.gray)
-                                                Spacer()
-                                                Text("-\(formatDuration(max(0, (audioService.state.currentTrack?.duration ?? 0) - audioService.state.currentTime)))")
-                                                    .font(.caption2)
-                                                    .foregroundColor(.gray)
-                                            }
-                                        }
-                                        .padding(.horizontal, 40)
+                                        menuButton
                                     }
-                                    
-                                    Spacer(minLength: 20)
-                                    
+                                    .padding(.horizontal, 26)
+
+                                    // Scrub Bar
+                                    VStack(spacing: 0) {
+                                        GeometryReader { geometry in
+                                            ZStack(alignment: .leading) {
+                                                // Hit Zone
+                                                Rectangle()
+                                                    .fill(Color.black.opacity(0.001))
+                                                    .frame(width: geometry.size.width, height: 26)
+
+                                                // Visible Track background
+                                                Rectangle()
+                                                    .fill(Color.white.opacity(0.2))
+                                                    .frame(width: geometry.size.width, height: 4)
+
+                                                // Active progress
+                                                Rectangle()
+                                                    .fill(Color.white)
+                                                    .frame(width: geometry.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)), height: 4)
+
+                                                Circle()
+                                                    .fill(Color.white)
+                                                    .frame(width: 12, height: 12)
+                                                    .offset(x: geometry.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)) - 6)
+                                            }
+                                            .contentShape(Rectangle())
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0)
+                                                    .onChanged { value in
+                                                        isScrubbing = true
+                                                        let percentage = min(max(0, Double(value.location.x / geometry.size.width)), 1.0)
+                                                        let newTime = percentage * (audioService.state.currentTrack?.duration ?? 0)
+                                                        audioService.state.currentTime = newTime
+                                                    }
+                                                    .onEnded { value in
+                                                        let percentage = min(max(0, Double(value.location.x / geometry.size.width)), 1.0)
+                                                        let newTime = percentage * (audioService.state.currentTrack?.duration ?? 0)
+                                                        audioService.seek(to: newTime)
+                                                        isScrubbing = false
+                                                    }
+                                            )
+                                        }
+                                        .frame(height: 26)
+
+                                        HStack {
+                                            Text(formatDuration(audioService.state.currentTime))
+                                                .font(.caption2)
+                                                .foregroundColor(.gray)
+                                            Spacer()
+                                            Text("-\(formatDuration(max(0, (audioService.state.currentTrack?.duration ?? 0) - audioService.state.currentTime)))")
+                                                .font(.caption2)
+                                                .foregroundColor(.gray)
+                                        }
+                                    }
+                                    .padding(.horizontal, 32)
+
+                                    Spacer().frame(height: 26)
+
                                     // Controls
                                     HStack(alignment: .center) {
                                         Button(action: {
@@ -515,9 +519,9 @@ struct NowPlayingView: View {
                                             }
                                         }) {
                                             Image(systemName: audioService.state.isPlaying ? "pause.fill" : "play.fill")
-                                                .font(.system(size: 44))
+                                                .font(.system(size: 34))
                                                 .foregroundColor(.white)
-                                                .frame(width: 68, height: 68)
+                                                .frame(width: 44, height: 44)
                                                 .contentShape(Rectangle())
                                         }
                                         
@@ -551,7 +555,7 @@ struct NowPlayingView: View {
 
                                     if showVolumeSlider {
                                         // Volume slider sits low, just above the utility row (Apple Music order)
-                                        HStack(spacing: 15) {
+                                        HStack(spacing: 12) {
                                             Image(systemName: "speaker.fill")
                                                 .foregroundColor(.white.opacity(0.6))
                                                 .font(.system(size: 12))
@@ -561,7 +565,7 @@ struct NowPlayingView: View {
                                                     // Hit Zone
                                                     Rectangle()
                                                         .fill(Color.black.opacity(0.001))
-                                                        .frame(width: sliderGeo.size.width, height: 30)
+                                                        .frame(width: sliderGeo.size.width, height: 28)
 
                                                     // Track background
                                                     Rectangle()
@@ -578,8 +582,8 @@ struct NowPlayingView: View {
                                                     // Minimal circular thumb
                                                     Circle()
                                                         .fill(Color.white)
-                                                        .frame(width: 10, height: 10)
-                                                        .offset(x: sliderGeo.size.width * CGFloat(audioService.state.volume) - 5)
+                                                        .frame(width: 16, height: 16)
+                                                        .offset(x: sliderGeo.size.width * CGFloat(audioService.state.volume) - 8)
                                                 }
                                                 .contentShape(Rectangle())
                                                 .gesture(
@@ -590,18 +594,25 @@ struct NowPlayingView: View {
                                                         }
                                                 )
                                             }
-                                            .frame(height: 30)
+                                            .frame(height: 28)
 
                                             Image(systemName: "speaker.wave.3.fill")
                                                 .foregroundColor(.white.opacity(0.6))
                                                 .font(.system(size: 12))
                                         }
-                                        .padding(.horizontal, 40)
-                                        .padding(.top, 12)
+                                        .padding(.horizontal, 32)
+                                        .padding(.top, 20)
                                     }
 
-                                    // Bottom utility row (AirPlay, like Apple Music)
+                                    Spacer(minLength: 4)
+
+                                    // Bottom utility row (AirPlay and queue, like Apple Music)
                                     HStack {
+                                        Color.clear
+                                            .frame(width: 44, height: 44)
+
+                                        Spacer()
+
                                         AirPlayButton()
                                             .frame(width: 44, height: 44)
                                             .accessibilityLabel("AirPlay")
@@ -617,17 +628,16 @@ struct NowPlayingView: View {
                                         }
                                         .accessibilityLabel("Queue")
                                     }
-                                    .padding(.horizontal, 32)
+                                    .padding(.horizontal, 78)
 
                                     Text(audioOutputName)
                                         .font(.caption)
                                         .foregroundColor(.gray)
                                         .lineLimit(1)
                                         .padding(.top, 2)
-
-                                    Spacer(minLength: 8)
+.padding(.bottom, 12)
                                 }
-                                .frame(width: geometry.size.width, height: screenHeight - 50)
+                                .frame(width: geometry.size.width, height: contentHeight)
                                 .contentShape(Rectangle())
                             }
                             .frame(width: geometry.size.width)
@@ -837,7 +847,7 @@ struct NowPlayingView: View {
             return
         }
         if port.portType == .builtInSpeaker {
-            audioOutputName = port.portName
+            audioOutputName = UIDevice.current.name
         } else {
             audioOutputName = "\(UIDevice.current.name) → \(port.portName)"
         }
