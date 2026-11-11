@@ -38,7 +38,7 @@ class AudioPlayerService: ObservableObject {
     private var lastRequestedArtworkTrackId: Int64?
     
     init() {
-        let showVolume = UserDefaults.standard.bool(forKey: "RC_ShowVolumeSlider")
+        let showVolume = UserDefaults.standard.object(forKey: "RC_ShowVolumeSlider") as? Bool ?? true
         if showVolume {
             let savedVolume = UserDefaults.standard.object(forKey: "audio_player_volume") as? Float ?? 1.0
             state.volume = savedVolume
@@ -427,7 +427,7 @@ class AudioPlayerService: ObservableObject {
             player?.allowsExternalPlayback = false
             player?.replaceCurrentItem(with: playerItem)
         }
-        let showVolume = UserDefaults.standard.bool(forKey: "RC_ShowVolumeSlider")
+        let showVolume = UserDefaults.standard.object(forKey: "RC_ShowVolumeSlider") as? Bool ?? true
         player?.volume = showVolume ? state.volume : 1.0
         
         // Ensure we stop old observer
@@ -766,6 +766,16 @@ class AudioPlayerService: ObservableObject {
         }
     }
     
+    func playFromQueue(at index: Int) {
+        guard queue.indices.contains(index) else { return }
+        if index == queueIndex, state.currentTrack != nil {
+            play()
+            return
+        }
+        queueIndex = index
+        loadTrack(at: index)
+    }
+
     // MARK: - Queue from Now Playing
 
     private var queueAnchorTrack: Track? {

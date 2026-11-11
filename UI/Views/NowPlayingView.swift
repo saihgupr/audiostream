@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import Combine
 
 struct ScrollOffsetPreferenceKey: PreferenceKey {
     typealias Value = CGFloat
@@ -14,12 +15,14 @@ struct NowPlayingView: View {
     @EnvironmentObject var navManager: NavigationManager
     @EnvironmentObject var connectionService: ServerConnectionService
     @Binding var expand: Bool
-    @AppStorage("RC_ShowVolumeSlider") private var showVolumeSlider: Bool = false
+    @AppStorage("RC_ShowVolumeSlider") private var showVolumeSlider: Bool = true
     @State private var isScrubbing: Bool = false
     @State private var scrollOffset: CGFloat = 0
     @State private var selectedTrackForDelete: Track? = nil
     @State private var showTrackDeleteConfirmation = false
     @State private var showMenu = false
+    @State private var showQueue = false
+    @State private var audioOutputName: String = ""
     
     var body: some View {
         ZStack {
@@ -55,28 +58,6 @@ struct NowPlayingView: View {
                                 .padding()
                         }
                         Spacer()
-                        Text("Now Playing")
-                            .font(.headline)
-                            .foregroundColor(.white.opacity(0.8))
-                        Spacer()
-                        if let _ = audioService.state.currentTrack {
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    showMenu.toggle()
-                                }
-                            }) {
-                                Image(systemName: "ellipsis")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(.white.opacity(0.8))
-                                    .padding()
-                            }
-                        } else {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 24))
-                                .foregroundColor(.white.opacity(0.8))
-                                .opacity(0)
-                                .padding()
-                        }
                     }
                     .frame(height: 50)
                     .contentShape(Rectangle())
@@ -128,35 +109,39 @@ struct NowPlayingView: View {
                                 Spacer()
                                 
                                 // Track Info
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(audioService.state.currentTrack?.title ?? "Not Playing")
-                                        .font(.title2)
-                                        .bold()
-                                        .foregroundColor(.white)
-                                        .lineLimit(2)
-                                    
-                                    HStack(spacing: 0) {
-                                        let artistParts = (audioService.state.currentTrack?.artist ?? "Select Music").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+                                HStack(alignment: .center) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(audioService.state.currentTrack?.title ?? "Not Playing")
+                                            .font(.title2)
+                                            .bold()
+                                            .foregroundColor(.white)
+                                            .lineLimit(2)
                                         
-                                        ForEach(artistParts.indices, id: \.self) { index in
-                                            let artist = artistParts[index]
-                                            Text(artist)
-                                                .font(.body)
-                                                .foregroundColor(.gray)
-                                                .onTapGesture {
-                                                    navManager.navigateToArtist(name: artist)
-                                                    withAnimation { expand = false }
-                                                }
+                                        HStack(spacing: 0) {
+                                            let artistParts = (audioService.state.currentTrack?.artist ?? "Select Music").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
                                             
-                                            if index < artistParts.count - 1 {
-                                                Text(", ")
+                                            ForEach(artistParts.indices, id: \.self) { index in
+                                                let artist = artistParts[index]
+                                                Text(artist)
                                                     .font(.body)
                                                     .foregroundColor(.gray)
+                                                    .onTapGesture {
+                                                        navManager.navigateToArtist(name: artist)
+                                                        withAnimation { expand = false }
+                                                    }
+                                                
+                                                if index < artistParts.count - 1 {
+                                                    Text(", ")
+                                                        .font(.body)
+                                                        .foregroundColor(.gray)
+                                                }
                                             }
                                         }
                                     }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    
+                                    menuButton
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
                                 
                                 // Scrub Bar
                                 VStack(spacing: 0) {
@@ -175,6 +160,11 @@ struct NowPlayingView: View {
                                                 .fill(Color.white)
                                                 .frame(width: scrubGeo.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)), height: 4)
                                                 .cornerRadius(2)
+                                            
+                                            Circle()
+                                                .fill(Color.white)
+                                                .frame(width: 8, height: 8)
+                                                .offset(x: scrubGeo.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)) - 4)
                                         }
                                         .contentShape(Rectangle())
                                         .gesture(
@@ -200,7 +190,7 @@ struct NowPlayingView: View {
                                             .font(.caption2)
                                             .foregroundColor(.gray)
                                         Spacer()
-                                        Text(formatDuration(audioService.state.currentTrack?.duration ?? 0))
+                                        Text("-\(formatDuration(max(0, (audioService.state.currentTrack?.duration ?? 0) - audioService.state.currentTime)))")
                                             .font(.caption2)
                                             .foregroundColor(.gray)
                                     }
@@ -239,8 +229,8 @@ struct NowPlayingView: View {
                                             audioService.play()
                                         }
                                     }) {
-                                        Image(systemName: audioService.state.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                            .font(.system(size: 68))
+                                        Image(systemName: audioService.state.isPlaying ? "pause.fill" : "play.fill")
+                                            .font(.system(size: 44))
                                             .foregroundColor(.white)
                                             .frame(width: 68, height: 68)
                                             .contentShape(Rectangle())
@@ -324,19 +314,21 @@ struct NowPlayingView: View {
 
                                     Spacer()
 
-                                    Button(action: {
-                                        withAnimation(.easeInOut(duration: 0.15)) {
-                                            showVolumeSlider.toggle()
-                                        }
-                                    }) {
-                                        Image(systemName: showVolumeSlider ? "speaker.wave.3.fill" : "speaker.fill")
+                                    Button(action: { showQueue = true }) {
+                                        Image(systemName: "list.bullet")
                                             .font(.system(size: 20, weight: .semibold))
-                                            .foregroundColor(showVolumeSlider ? Color.white.opacity(0.85) : Color.white.opacity(0.35))
+                                            .foregroundColor(.white.opacity(0.85))
                                             .frame(width: 44, height: 44)
                                             .contentShape(Rectangle())
                                     }
-                                    .accessibilityLabel("Volume Slider")
+                                    .accessibilityLabel("Queue")
                                 }
+
+                                Text(audioOutputName)
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                                    .lineLimit(1)
+                                    .padding(.top, 4)
 
                                 Spacer()
                             }
@@ -392,37 +384,42 @@ struct NowPlayingView: View {
                                     Spacer(minLength: 20)
                                     
                                     // Info + Scrub Bar group
-                                    VStack(spacing: 15) {
+                                    VStack(spacing: 16) {
                                         // Info
-                                        VStack(spacing: 4) {
-                                            Text(audioService.state.currentTrack?.title ?? "Not Playing")
-                                                .font(.title2)
-                                                .bold()
-                                                .foregroundColor(.white)
-                                                .multilineTextAlignment(.center)
-                                            
-                                            HStack(spacing: 0) {
-                                                let artistParts = (audioService.state.currentTrack?.artist ?? "Select Music").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
-                                                
-                                                ForEach(artistParts.indices, id: \.self) { index in
-                                                    let artist = artistParts[index]
-                                                    Text(artist)
-                                                        .font(.body)
-                                                        .foregroundColor(.gray)
-                                                        .onTapGesture {
-                                                            navManager.navigateToArtist(name: artist)
-                                                            withAnimation { expand = false }
-                                                        }
-                                                    
-                                                    if index < artistParts.count - 1 {
-                                                        Text(", ")
+                                        HStack(alignment: .center) {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(audioService.state.currentTrack?.title ?? "Not Playing")
+                                                    .font(.title2)
+                                                    .bold()
+                                                    .foregroundColor(.white)
+                                                    .multilineTextAlignment(.leading)
+
+                                                HStack(spacing: 0) {
+                                                    let artistParts = (audioService.state.currentTrack?.artist ?? "Select Music").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+
+                                                    ForEach(artistParts.indices, id: \.self) { index in
+                                                        let artist = artistParts[index]
+                                                        Text(artist)
                                                             .font(.body)
                                                             .foregroundColor(.gray)
+                                                            .onTapGesture {
+                                                                navManager.navigateToArtist(name: artist)
+                                                                withAnimation { expand = false }
+                                                            }
+
+                                                        if index < artistParts.count - 1 {
+                                                            Text(", ")
+                                                                .font(.body)
+                                                                .foregroundColor(.gray)
+                                                        }
                                                     }
                                                 }
                                             }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                                            menuButton
                                         }
-                                        .padding(.horizontal, 20)
+                                        .padding(.horizontal, 24)
                                         
                                         // Scrub Bar
                                         VStack(spacing: 0) {
@@ -442,6 +439,11 @@ struct NowPlayingView: View {
                                                     Rectangle()
                                                         .fill(Color.white)
                                                         .frame(width: geometry.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)), height: 4)
+
+                                                    Circle()
+                                                        .fill(Color.white)
+                                                        .frame(width: 8, height: 8)
+                                                        .offset(x: geometry.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)) - 4)
                                                 }
                                                 .contentShape(Rectangle())
                                                 .gesture(
@@ -467,7 +469,7 @@ struct NowPlayingView: View {
                                                     .font(.caption2)
                                                     .foregroundColor(.gray)
                                                 Spacer()
-                                                Text(formatDuration(audioService.state.currentTrack?.duration ?? 0))
+                                                Text("-\(formatDuration(max(0, (audioService.state.currentTrack?.duration ?? 0) - audioService.state.currentTime)))")
                                                     .font(.caption2)
                                                     .foregroundColor(.gray)
                                             }
@@ -512,8 +514,8 @@ struct NowPlayingView: View {
                                                 audioService.play()
                                             }
                                         }) {
-                                            Image(systemName: audioService.state.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                                .font(.system(size: 68))
+                                            Image(systemName: audioService.state.isPlaying ? "pause.fill" : "play.fill")
+                                                .font(.system(size: 44))
                                                 .foregroundColor(.white)
                                                 .frame(width: 68, height: 68)
                                                 .contentShape(Rectangle())
@@ -606,20 +608,22 @@ struct NowPlayingView: View {
 
                                         Spacer()
 
-                                        Button(action: {
-                                            withAnimation(.easeInOut(duration: 0.15)) {
-                                                showVolumeSlider.toggle()
-                                            }
-                                        }) {
-                                            Image(systemName: showVolumeSlider ? "speaker.wave.3.fill" : "speaker.fill")
+                                        Button(action: { showQueue = true }) {
+                                            Image(systemName: "list.bullet")
                                                 .font(.system(size: 20, weight: .semibold))
-                                                .foregroundColor(showVolumeSlider ? Color.white.opacity(0.85) : Color.white.opacity(0.35))
+                                                .foregroundColor(.white.opacity(0.85))
                                                 .frame(width: 44, height: 44)
                                                 .contentShape(Rectangle())
                                         }
-                                        .accessibilityLabel("Volume Slider")
+                                        .accessibilityLabel("Queue")
                                     }
                                     .padding(.horizontal, 32)
+
+                                    Text(audioOutputName)
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                        .lineLimit(1)
+                                        .padding(.top, 2)
 
                                     Spacer(minLength: 8)
                                 }
@@ -780,6 +784,14 @@ struct NowPlayingView: View {
             }
         }
         .background(Color.black.edgesIgnoringSafeArea(.all))
+        .onAppear { updateAudioOutput() }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification).receive(on: DispatchQueue.main)) { _ in
+            updateAudioOutput()
+        }
+        .sheet(isPresented: $showQueue) {
+            QueueView()
+                .environmentObject(audioService)
+        }
         .alert(isPresented: $showTrackDeleteConfirmation) {
             Alert(
                 title: Text("Delete Song"),
@@ -801,6 +813,36 @@ struct NowPlayingView: View {
         }
     }
     
+    private var menuButton: some View {
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                showMenu.toggle()
+            }
+        }) {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 32, height: 32)
+                .background(Color.white.opacity(0.15))
+                .clipShape(Circle())
+        }
+        .accessibilityLabel("More")
+    }
+
+    // Source device arrow output device, like the Music player ("iPhone -> Computer Speaker")
+    private func updateAudioOutput() {
+        let port = AVAudioSession.sharedInstance().currentRoute.outputs.first
+        guard let port = port else {
+            audioOutputName = ""
+            return
+        }
+        if port.portType == .builtInSpeaker {
+            audioOutputName = port.portName
+        } else {
+            audioOutputName = "\(UIDevice.current.name) → \(port.portName)"
+        }
+    }
+
     func formatDuration(_ duration: TimeInterval) -> String {
         let minutes = Int(duration) / 60
         let seconds = Int(duration) % 60
@@ -844,5 +886,59 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+struct QueueView: View {
+    @EnvironmentObject var audioService: AudioPlayerService
+    @Environment(\.presentationMode) private var presentationMode
+
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(Array(audioService.queue.enumerated()), id: \.offset) { index, track in
+                    Button(action: {
+                        audioService.playFromQueue(at: index)
+                    }) {
+                        HStack(spacing: 12) {
+                            if index == audioService.queueIndex {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.white)
+                                    .frame(width: 20)
+                            } else {
+                                Color.clear
+                                    .frame(width: 20, height: 1)
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(track.title)
+                                    .foregroundColor(index == audioService.queueIndex ? .white : .primary)
+                                    .lineLimit(1)
+                                Text(track.artist)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Playing Next")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
     }
 }

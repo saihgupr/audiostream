@@ -8,7 +8,7 @@ struct SettingsView: View {
     @ObservedObject private var artistMergeService = ArtistMergeService.shared
     @ObservedObject private var migrationService = MusicMigrationService.shared
     @State private var showMigrationConfirmAlert: Bool = false
-    @AppStorage("RC_ShowVolumeSlider") private var showVolumeSlider: Bool = false
+    @AppStorage("RC_ShowVolumeSlider") private var showVolumeSlider: Bool = true
     @State private var serverAddress: String = ""
     
     var body: some View {
