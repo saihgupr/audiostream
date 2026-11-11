@@ -47,7 +47,7 @@ struct NowPlayingView: View {
                 let contentHeight = screenHeight - (showsHeader ? 50 : 0)
                 // Music sizes the artwork to the width; cap it by what is left after
                 // the controls so nothing has to scroll on shorter phones.
-                let artworkSide = min(geometry.size.width - 52, contentHeight - 324)
+                let artworkSide = min(geometry.size.width - 52, contentHeight - 366)
                 
                 VStack(spacing: 0) {
                     // Header (Dismiss button) - iPhone portrait uses the sheet grabber, like Music
@@ -386,7 +386,7 @@ struct NowPlayingView: View {
                                         }
                                     }
 
-                                    Spacer().frame(height: 26)
+                                    Spacer().frame(height: 68)
 
                                     // Info
                                     HStack(alignment: .center) {
