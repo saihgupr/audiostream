@@ -860,11 +860,25 @@ struct NowPlayingView: View {
     }
 }
 
-private struct AirPlayButton: UIViewRepresentable {
+private struct AirPlayButton: View {
+    var body: some View {
+        ZStack {
+            AirPlayRoutePicker()
+            // Keep the Music-style white glyph even while casting; the picker
+            // below stays invisible but still handles the tap.
+            Image(systemName: "airplayaudio")
+                .font(.system(size: 22, weight: .regular))
+                .foregroundColor(.white.opacity(0.85))
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+private struct AirPlayRoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
-        picker.activeTintColor = .systemBlue
-        picker.tintColor = UIColor.white.withAlphaComponent(0.85)
+        picker.tintColor = .clear
+        picker.activeTintColor = .clear
         picker.backgroundColor = .clear
         return picker
     }
