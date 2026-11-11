@@ -766,32 +766,44 @@ class AudioPlayerService: ObservableObject {
         }
     }
     
-    private func handleQueueAlbumCommand() {
-        deletePendingCommandFile()
-        guard let currentTrack = state.currentTrack ?? (queue.indices.contains(queueIndex) ? queue[queueIndex] : nil) else {
-            print("[AudioReceiver] queuealbum: no current track")
-            return
-        }
-        
+    // MARK: - Queue from Now Playing
+
+    private var queueAnchorTrack: Track? {
+        state.currentTrack ?? (queue.indices.contains(queueIndex) ? queue[queueIndex] : nil)
+    }
+
+    /// Appends the whole current album after the playing track.
+    func queueCurrentAlbum() {
+        guard let currentTrack = queueAnchorTrack else { return }
         let albumName = currentTrack.album
-        print("[AudioReceiver] queuealbum: queuing album '\(albumName)' for track '\(currentTrack.title)'")
-        
-        let connectionService = ServerConnectionService()
-        let service = MusicLibraryService(connectionService: connectionService)
-        
+        fetchAlbumTracks(albumName: albumName, currentTrack: currentTrack) { [weak self] albumTracks in
+            guard let self = self, !albumTracks.isEmpty else { return }
+            self.addToQueue(albumTitle: albumName, tracks: albumTracks.sorted(by: Track.compareTrackOrder))
+        }
+    }
+
+    /// Appends the current artist's tracks after the playing track.
+    func queueCurrentArtist() {
+        guard let currentTrack = queueAnchorTrack else { return }
+        fetchArtistTracks(artistName: currentTrack.artist) { [weak self] artistTracks in
+            guard let self = self, !artistTracks.isEmpty else { return }
+            self.addToQueue(tracks: artistTracks)
+        }
+    }
+
+    private func fetchAlbumTracks(albumName: String, currentTrack: Track, handler: @escaping ([Track]) -> Void) {
+        let service = MusicLibraryService(connectionService: ServerConnectionService())
         service.fetchAllTracks()
             .receive(on: DispatchQueue.main)
             .sink(
-                receiveCompletion: { completion in
-                    if case .failure(let err) = completion {
-                        print("[AudioReceiver] queuealbum: failed to fetch tracks: \(err)")
+                receiveCompletion: { result in
+                    if case .failure(let err) = result {
+                        print("[Queue] album '\(albumName)': failed to fetch tracks: \(err)")
                     }
                 },
-                receiveValue: { [weak self] allTracks in
-                    guard let self = self else { return }
-                    
+                receiveValue: { allTracks in
                     var albumTracks = allTracks.filter { $0.album.localizedCaseInsensitiveCompare(albumName) == .orderedSame }
-                    
+
                     if albumTracks.isEmpty {
                         albumTracks = allTracks.filter { track in
                             let trackKey = "\(track.album.lowercased())|\(track.artist.lowercased())"
@@ -799,44 +811,24 @@ class AudioPlayerService: ObservableObject {
                             return trackKey == currentKey || track.album.localizedCaseInsensitiveContains(albumName)
                         }
                     }
-                    
-                    guard !albumTracks.isEmpty else {
-                        print("[AudioReceiver] queuealbum: no tracks found for album '\(albumName)'")
-                        return
-                    }
-                    
-                    let sortedTracks = albumTracks.sorted(by: Track.compareTrackOrder)
-                    print("[AudioReceiver] queuealbum: queuing \(sortedTracks.count) tracks for album '\(albumName)'")
-                    self.addToQueue(albumTitle: albumName, tracks: sortedTracks)
+
+                    handler(albumTracks)
                 }
             )
             .store(in: &commandCancellables)
     }
-    
-    private func handleQueueArtistCommand() {
-        deletePendingCommandFile()
-        guard let currentTrack = state.currentTrack ?? (queue.indices.contains(queueIndex) ? queue[queueIndex] : nil) else {
-            print("[AudioReceiver] queueartist: no current track")
-            return
-        }
-        
-        let artistName = currentTrack.artist
-        print("[AudioReceiver] queueartist: queuing artist '\(artistName)' for track '\(currentTrack.title)'")
-        
-        let connectionService = ServerConnectionService()
-        let service = MusicLibraryService(connectionService: connectionService)
-        
+
+    private func fetchArtistTracks(artistName: String, handler: @escaping ([Track]) -> Void) {
+        let service = MusicLibraryService(connectionService: ServerConnectionService())
         service.fetchAllTracks()
             .receive(on: DispatchQueue.main)
             .sink(
-                receiveCompletion: { completion in
-                    if case .failure(let err) = completion {
-                        print("[AudioReceiver] queueartist: failed to fetch tracks: \(err)")
+                receiveCompletion: { result in
+                    if case .failure(let err) = result {
+                        print("[Queue] artist '\(artistName)': failed to fetch tracks: \(err)")
                     }
                 },
-                receiveValue: { [weak self] allTracks in
-                    guard let self = self else { return }
-                    
+                receiveValue: { allTracks in
                     let artistTracks = allTracks.filter { track in
                         if track.artist.localizedCaseInsensitiveCompare(artistName) == .orderedSame {
                             return true
@@ -844,16 +836,45 @@ class AudioPlayerService: ObservableObject {
                         let contributors = track.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                         return contributors.contains { $0.localizedCaseInsensitiveCompare(artistName) == .orderedSame }
                     }
-                    
-                    guard !artistTracks.isEmpty else {
-                        print("[AudioReceiver] queueartist: no tracks found for artist '\(artistName)'")
-                        return
-                    }
-                    
-                    self.setQueueWithNewTracks(artistTracks, currentTrack: currentTrack, shuffle: true)
+
+                    handler(artistTracks)
                 }
             )
             .store(in: &commandCancellables)
+    }
+
+    private func handleQueueAlbumCommand() {
+        deletePendingCommandFile()
+        guard let currentTrack = queueAnchorTrack else {
+            print("[AudioReceiver] queuealbum: no current track")
+            return
+        }
+
+        print("[AudioReceiver] queuealbum: queuing album '\(currentTrack.album)' for track '\(currentTrack.title)'")
+        fetchAlbumTracks(albumName: currentTrack.album, currentTrack: currentTrack) { [weak self] albumTracks in
+            guard let self = self, !albumTracks.isEmpty else {
+                print("[AudioReceiver] queuealbum: no tracks found for album '\(currentTrack.album)'")
+                return
+            }
+            self.addToQueue(albumTitle: currentTrack.album, tracks: albumTracks.sorted(by: Track.compareTrackOrder))
+        }
+    }
+
+    private func handleQueueArtistCommand() {
+        deletePendingCommandFile()
+        guard let currentTrack = queueAnchorTrack else {
+            print("[AudioReceiver] queueartist: no current track")
+            return
+        }
+
+        print("[AudioReceiver] queueartist: queuing artist '\(currentTrack.artist)' for track '\(currentTrack.title)'")
+        fetchArtistTracks(artistName: currentTrack.artist) { [weak self] artistTracks in
+            guard let self = self, !artistTracks.isEmpty else {
+                print("[AudioReceiver] queueartist: no tracks found for artist '\(currentTrack.artist)'")
+                return
+            }
+            self.setQueueWithNewTracks(artistTracks, currentTrack: currentTrack, shuffle: true)
+        }
     }
     
     private func handleShuffleAllCommand(attempt: Int = 0) {

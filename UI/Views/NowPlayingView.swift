@@ -673,9 +673,27 @@ struct NowPlayingView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                                 }
-                                
+
+                                Button(action: {
+                                    withAnimation { showMenu = false }
+                                    audioService.queueCurrentAlbum()
+                                }) {
+                                    HStack {
+                                        Image(systemName: "text.badge.plus")
+                                            .font(.system(size: 16))
+                                            .frame(width: 20)
+                                        Text("Queue Album")
+                                            .font(.body)
+                                    }
+                                    .foregroundColor(.white)
+                                    .padding(.vertical, 12)
+                                    .padding(.horizontal, 16)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+
                                 Divider().background(Color.white.opacity(0.15))
-                                
+
                                 let artistParts = currentTrack.artist.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
                                 ForEach(artistParts, id: \.self) { artist in
                                     Button(action: {
@@ -696,10 +714,30 @@ struct NowPlayingView: View {
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
                                     }
-                                    
+
                                     Divider().background(Color.white.opacity(0.15))
                                 }
-                                
+
+                                Button(action: {
+                                    withAnimation { showMenu = false }
+                                    audioService.queueCurrentArtist()
+                                }) {
+                                    HStack {
+                                        Image(systemName: "text.badge.plus")
+                                            .font(.system(size: 16))
+                                            .frame(width: 20)
+                                        Text("Queue Artist")
+                                            .font(.body)
+                                    }
+                                    .foregroundColor(.white)
+                                    .padding(.vertical, 12)
+                                    .padding(.horizontal, 16)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+
+                                Divider().background(Color.white.opacity(0.15))
+
                                 if connectionService.librarySource == .local {
                                     Button(action: {
                                         withAnimation { showMenu = false }
