@@ -609,12 +609,12 @@ struct NowPlayingView: View {
                                     // Bottom utility row (AirPlay and queue, like Apple Music)
                                     HStack {
                                         Color.clear
-                                            .frame(width: 44, height: 44)
+                                            .frame(width: 34, height: 34)
 
                                         Spacer()
 
                                         AirPlayButton()
-                                            .frame(width: 44, height: 44)
+                                            .frame(width: 34, height: 34)
                                             .accessibilityLabel("AirPlay")
 
                                         Spacer()
@@ -623,7 +623,7 @@ struct NowPlayingView: View {
                                             Image(systemName: "list.bullet")
                                                 .font(.system(size: 20, weight: .semibold))
                                                 .foregroundColor(.white.opacity(0.85))
-                                                .frame(width: 44, height: 44)
+                                                .frame(width: 34, height: 34)
                                                 .contentShape(Rectangle())
                                         }
                                         .accessibilityLabel("Queue")
@@ -635,7 +635,7 @@ struct NowPlayingView: View {
                                         .foregroundColor(.gray)
                                         .lineLimit(1)
                                         .padding(.top, 2)
-.padding(.bottom, 12)
+                                        .padding(.bottom, 12)
                                 }
                                 .frame(width: geometry.size.width, height: contentHeight)
                                 .contentShape(Rectangle())
