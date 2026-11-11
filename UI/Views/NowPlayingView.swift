@@ -634,8 +634,8 @@ struct NowPlayingView: View {
                                         .font(.caption)
                                         .foregroundColor(.gray)
                                         .lineLimit(1)
-                                        .padding(.top, 2)
-                                        .padding(.bottom, 12)
+                                        .padding(.top, -5)
+                                        .padding(.bottom, 19)
                                 }
                                 .frame(width: geometry.size.width, height: contentHeight)
                                 .contentShape(Rectangle())
