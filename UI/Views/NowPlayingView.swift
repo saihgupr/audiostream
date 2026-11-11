@@ -547,6 +547,57 @@ struct NowPlayingView: View {
                                     }
                                     .padding(.horizontal, 32)
 
+                                    if showVolumeSlider {
+                                        // Volume slider sits low, just above the utility row (Apple Music order)
+                                        HStack(spacing: 15) {
+                                            Image(systemName: "speaker.fill")
+                                                .foregroundColor(.white.opacity(0.6))
+                                                .font(.system(size: 12))
+
+                                            GeometryReader { sliderGeo in
+                                                ZStack(alignment: .leading) {
+                                                    // Hit Zone
+                                                    Rectangle()
+                                                        .fill(Color.black.opacity(0.001))
+                                                        .frame(width: sliderGeo.size.width, height: 30)
+
+                                                    // Track background
+                                                    Rectangle()
+                                                        .fill(Color.white.opacity(0.2))
+                                                        .frame(width: sliderGeo.size.width, height: 4)
+                                                        .cornerRadius(2)
+
+                                                    // Active progress
+                                                    Rectangle()
+                                                        .fill(Color.white)
+                                                        .frame(width: sliderGeo.size.width * CGFloat(audioService.state.volume), height: 4)
+                                                        .cornerRadius(2)
+
+                                                    // Minimal circular thumb
+                                                    Circle()
+                                                        .fill(Color.white)
+                                                        .frame(width: 10, height: 10)
+                                                        .offset(x: sliderGeo.size.width * CGFloat(audioService.state.volume) - 5)
+                                                }
+                                                .contentShape(Rectangle())
+                                                .gesture(
+                                                    DragGesture(minimumDistance: 0)
+                                                        .onChanged { value in
+                                                            let percentage = min(max(0, Float(value.location.x / sliderGeo.size.width)), 1.0)
+                                                            audioService.setVolume(percentage)
+                                                        }
+                                                )
+                                            }
+                                            .frame(height: 30)
+
+                                            Image(systemName: "speaker.wave.3.fill")
+                                                .foregroundColor(.white.opacity(0.6))
+                                                .font(.system(size: 12))
+                                        }
+                                        .padding(.horizontal, 40)
+                                        .padding(.top, 12)
+                                    }
+
                                     // Bottom utility row (AirPlay, like Apple Music)
                                     HStack {
                                         AirPlayButton()
@@ -570,62 +621,10 @@ struct NowPlayingView: View {
                                     }
                                     .padding(.horizontal, 32)
 
-                                    Spacer(minLength: 30)
+                                    Spacer(minLength: 8)
                                 }
                                 .frame(width: geometry.size.width, height: screenHeight - 50)
                                 .contentShape(Rectangle())
-                                
-                                if showVolumeSlider {
-                                    // Volume Section (Sits below the fold)
-                                    HStack(spacing: 15) {
-                                        Image(systemName: "speaker.fill")
-                                            .foregroundColor(.white.opacity(0.6))
-                                            .font(.system(size: 12))
-                                        
-                                        GeometryReader { sliderGeo in
-                                            ZStack(alignment: .leading) {
-                                                // Hit Zone
-                                                Rectangle()
-                                                    .fill(Color.black.opacity(0.001))
-                                                    .frame(width: sliderGeo.size.width, height: 30)
-                                                
-                                                // Track background
-                                                Rectangle()
-                                                    .fill(Color.white.opacity(0.2))
-                                                    .frame(width: sliderGeo.size.width, height: 4)
-                                                    .cornerRadius(2)
-                                                
-                                                // Active progress
-                                                Rectangle()
-                                                    .fill(Color.white)
-                                                    .frame(width: sliderGeo.size.width * CGFloat(audioService.state.volume), height: 4)
-                                                    .cornerRadius(2)
-                                                
-                                                // Minimal circular thumb
-                                                Circle()
-                                                    .fill(Color.white)
-                                                    .frame(width: 10, height: 10)
-                                                    .offset(x: sliderGeo.size.width * CGFloat(audioService.state.volume) - 5)
-                                            }
-                                            .contentShape(Rectangle())
-                                            .gesture(
-                                                DragGesture(minimumDistance: 0)
-                                                    .onChanged { value in
-                                                        let percentage = min(max(0, Float(value.location.x / sliderGeo.size.width)), 1.0)
-                                                        audioService.setVolume(percentage)
-                                                    }
-                                            )
-                                        }
-                                        .frame(height: 30)
-                                        
-                                        Image(systemName: "speaker.wave.3.fill")
-                                            .foregroundColor(.white.opacity(0.6))
-                                            .font(.system(size: 12))
-                                    }
-                                    .padding(.horizontal, 40)
-                                    .padding(.bottom, 50)
-                                    .frame(height: 100)
-                                }
                             }
                             .frame(width: geometry.size.width)
                         }
