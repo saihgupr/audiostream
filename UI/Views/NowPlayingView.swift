@@ -47,7 +47,7 @@ struct NowPlayingView: View {
                 let contentHeight = screenHeight - (showsHeader ? 50 : 0)
                 // Music sizes the artwork to the width; cap it by what is left after
                 // the controls so nothing has to scroll on shorter phones.
-                let artworkSide = min(geometry.size.width - 52, contentHeight - 366)
+                let artworkSide = min(geometry.size.width - 52, contentHeight - 421)
                 
                 VStack(spacing: 0) {
                     // Header (Dismiss button) - iPhone portrait uses the sheet grabber, like Music
@@ -354,7 +354,7 @@ struct NowPlayingView: View {
                                 
                                 // Main content taking up full visible height
                                 VStack {
-                                    Spacer().frame(height: 22)
+                                    Spacer().frame(height: 86)
 
                                     // Artwork
                                     Group {
@@ -386,7 +386,7 @@ struct NowPlayingView: View {
                                         }
                                     }
 
-                                    Spacer().frame(height: 68)
+                                    Spacer().frame(height: 59)
 
                                     // Info
                                     HStack(alignment: .center) {
@@ -519,7 +519,7 @@ struct NowPlayingView: View {
                                             }
                                         }) {
                                             Image(systemName: audioService.state.isPlaying ? "pause.fill" : "play.fill")
-                                                .font(.system(size: 34))
+                                                .font(.system(size: 40))
                                                 .foregroundColor(.white)
                                                 .frame(width: 44, height: 44)
                                                 .contentShape(Rectangle())
@@ -631,8 +631,8 @@ struct NowPlayingView: View {
                                     .padding(.horizontal, 78)
 
                                     Text(audioOutputName)
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.7))
                                         .lineLimit(1)
                                         .padding(.top, -5)
                                         .padding(.bottom, 19)
