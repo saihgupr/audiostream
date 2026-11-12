@@ -2,6 +2,14 @@ import SwiftUI
 import AVKit
 import Combine
 
+struct MenuAnchorKey: PreferenceKey {
+    typealias Value = Anchor<CGRect>?
+    static var defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
 struct ScrollOffsetPreferenceKey: PreferenceKey {
     typealias Value = CGFloat
     static var defaultValue: CGFloat = 0
@@ -663,11 +671,55 @@ struct NowPlayingView: View {
                         }
                     }
                 
-                // Floating options menu card
-                VStack {
-                    HStack {
-                        Spacer()
-                        VStack(alignment: .leading, spacing: 0) {
+
+            }
+        }
+        .background(Color.black.edgesIgnoringSafeArea(.all))
+        .overlayPreferenceValue(MenuAnchorKey.self) { anchor in
+            GeometryReader { geo in
+                if showMenu, let anchor = anchor {
+                    let rect = geo[anchor]
+                    menuCard
+                        .offset(
+                            x: min(max(rect.maxX - 204, 8), geo.size.width - 228),
+                            y: rect.maxY + 8
+                        )
+                        .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
+                        .zIndex(200)
+                }
+            }
+        }
+        .onAppear { updateAudioOutput() }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification).receive(on: DispatchQueue.main)) { _ in
+            updateAudioOutput()
+        }
+        .sheet(isPresented: $showQueue) {
+            QueueView()
+                .environmentObject(audioService)
+        }
+        .alert(isPresented: $showTrackDeleteConfirmation) {
+            Alert(
+                title: Text("Delete Song"),
+                message: Text("Are you sure you want to permanently delete '\(selectedTrackForDelete?.title ?? "")' from this device? This action cannot be undone."),
+                primaryButton: .destructive(Text("Delete")) {
+                    if let track = selectedTrackForDelete {
+                        let libraryService = MusicLibraryService(connectionService: connectionService)
+                        if libraryService.deleteTrack(track) {
+                            audioService.removeTrackFromQueue(track: track)
+                            NotificationCenter.default.post(name: .trackDidDelete, object: track)
+                        }
+                    }
+                    selectedTrackForDelete = nil
+                },
+                secondaryButton: .cancel {
+                    selectedTrackForDelete = nil
+                }
+            )
+        }
+    }
+    
+    private var menuCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
                             if let currentTrack = audioService.state.currentTrack {
                                 Button(action: {
                                     withAnimation { showMenu = false }
@@ -773,56 +825,19 @@ struct NowPlayingView: View {
                                     }
                                 }
                             }
-                        }
-                        .frame(width: 220)
-                        .background(
-                            BlurView(style: .systemUltraThinMaterialDark)
-                                .cornerRadius(14)
-                                .shadow(color: Color.black.opacity(0.4), radius: 10, x: 0, y: 5)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                        )
-                        .padding(.top, 55) // Align below the header
-                        .padding(.trailing, 16)
-                    }
-                    Spacer()
-                }
-                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
-                .zIndex(100)
-            }
         }
-        .background(Color.black.edgesIgnoringSafeArea(.all))
-        .onAppear { updateAudioOutput() }
-        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification).receive(on: DispatchQueue.main)) { _ in
-            updateAudioOutput()
-        }
-        .sheet(isPresented: $showQueue) {
-            QueueView()
-                .environmentObject(audioService)
-        }
-        .alert(isPresented: $showTrackDeleteConfirmation) {
-            Alert(
-                title: Text("Delete Song"),
-                message: Text("Are you sure you want to permanently delete '\(selectedTrackForDelete?.title ?? "")' from this device? This action cannot be undone."),
-                primaryButton: .destructive(Text("Delete")) {
-                    if let track = selectedTrackForDelete {
-                        let libraryService = MusicLibraryService(connectionService: connectionService)
-                        if libraryService.deleteTrack(track) {
-                            audioService.removeTrackFromQueue(track: track)
-                            NotificationCenter.default.post(name: .trackDidDelete, object: track)
-                        }
-                    }
-                    selectedTrackForDelete = nil
-                },
-                secondaryButton: .cancel {
-                    selectedTrackForDelete = nil
-                }
-            )
-        }
+        .frame(width: 220)
+        .background(
+            BlurView(style: .systemUltraThinMaterialDark)
+                .cornerRadius(14)
+                .shadow(color: Color.black.opacity(0.4), radius: 10, x: 0, y: 5)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
     }
-    
+
     private var menuButton: some View {
         Button(action: {
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -836,6 +851,7 @@ struct NowPlayingView: View {
                 .background(Color.white.opacity(0.15))
                 .clipShape(Circle())
         }
+        .anchorPreference(key: MenuAnchorKey.self, value: .bounds) { $0 }
         .accessibilityLabel("More")
     }
 
