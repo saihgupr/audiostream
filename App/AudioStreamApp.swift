@@ -100,6 +100,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct AudioStreamApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var connectionService = ServerConnectionService()
     @StateObject private var audioService = AudioPlayerService()
     // MusicLibraryService depends on ConnectionService, so we might need to initialize it differently 
@@ -111,6 +112,11 @@ struct AudioStreamApp: App {
                 .environmentObject(connectionService)
                 .environmentObject(audioService)
                 .preferredColorScheme(.dark)
+                .onChange(of: scenePhase) { phase in
+                    if phase == .background {
+                        AppStateBackupService.shared.save()
+                    }
+                }
         }
     }
 }

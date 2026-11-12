@@ -84,6 +84,16 @@ class ArtistMergeService: ObservableObject {
         saveGroups()
     }
     
+    /// Replaces the current merge groups with the ones decoded from a backup file.
+    @discardableResult
+    func restoreGroups(from url: URL) throws -> Int {
+        let data = try Data(contentsOf: url)
+        let groups = try JSONDecoder().decode([ArtistMergeGroup].self, from: data)
+        self.mergeGroups = groups
+        saveGroups()
+        return groups.count
+    }
+    
     /// Returns the canonical target artist if the given artist is in a merge group, otherwise returns the artist itself.
     func canonicalArtist(for artist: String) -> String {
         let trimmed = artist.trimmingCharacters(in: .whitespaces)

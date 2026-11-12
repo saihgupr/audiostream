@@ -149,6 +149,16 @@ class AlbumMergeService: ObservableObject {
         saveGroups()
     }
     
+    /// Replaces the current merge groups with the ones decoded from a backup file.
+    @discardableResult
+    func restoreGroups(from url: URL) throws -> Int {
+        let data = try Data(contentsOf: url)
+        let groups = try JSONDecoder().decode([MergeGroup].self, from: data)
+        self.mergeGroups = groups
+        saveGroups()
+        return groups.count
+    }
+    
     func process(albums: [Album]) -> [Album] {
         var result: [Album] = []
         var mergedIdentifiers = Set<AlbumIdentifier>()

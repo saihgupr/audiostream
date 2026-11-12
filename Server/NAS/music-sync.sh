@@ -63,6 +63,8 @@ scp -q -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new
     "$REMOTE:/tmp/audiostream_mergegroups.json" "$MERGE_DIR/mergegroups.json" 2>/dev/null || true
 scp -q -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
     "$REMOTE:/tmp/audiostream_artistmergegroups.json" "$MERGE_DIR/artistmergegroups.json" 2>/dev/null || true
+scp -q -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+    "$REMOTE:/var/mobile/Documents/audiostream_appstate.plist" "$MERGE_DIR/appstate.plist" 2>/dev/null || true
 
 DATE_DIR="$TRASH_ROOT/$(date +%F)"
 mkdir -p "$DATE_DIR"

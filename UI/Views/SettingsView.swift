@@ -10,6 +10,9 @@ struct SettingsView: View {
     @State private var showMigrationConfirmAlert: Bool = false
     @AppStorage("RC_ShowVolumeSlider") private var showVolumeSlider: Bool = true
     @State private var serverAddress: String = ""
+    @State private var backupAlertTitle: String = ""
+    @State private var backupAlertMessage: String = ""
+    @State private var showBackupAlert: Bool = false
     
     var body: some View {
         NavigationView {
@@ -31,6 +34,39 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+                }
+                
+                Section(header: Text("Backup & Restore"), footer: Text("Saves every app setting and merge group to Documents/audiostream_appstate.plist. The NAS sync copies it off the device every 30 minutes.")) {
+                    Button("Back Up Settings and Merges") {
+                        if AppStateBackupService.shared.save(force: true) {
+                            backupAlertTitle = "Backup Saved"
+                            backupAlertMessage = "Saved to /var/mobile/Documents/audiostream_appstate.plist."
+                        } else {
+                            backupAlertTitle = "Backup Failed"
+                            backupAlertMessage = "Could not write the backup file."
+                        }
+                        showBackupAlert = true
+                    }
+                    Button("Restore from Backup") {
+                        do {
+                            if let result = try AppStateBackupService.shared.restoreAll() {
+                                backupAlertTitle = "Restore Complete"
+                                backupAlertMessage = result.summary
+                            } else {
+                                backupAlertTitle = "No Backup Found"
+                                backupAlertMessage = "Run the NAS restore first or back up on the old device."
+                            }
+                        } catch {
+                            backupAlertTitle = "Restore Failed"
+                            backupAlertMessage = error.localizedDescription
+                        }
+                        showBackupAlert = true
+                    }
+                }
+                .alert(backupAlertTitle, isPresented: $showBackupAlert) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(backupAlertMessage)
                 }
                 
                 Section(header: Text("Playback")) {

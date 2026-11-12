@@ -33,15 +33,15 @@ struct NowPlayingView: View {
     @State private var audioOutputName: String = ""
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     
-    // iPhone portrait uses the dedicated Music-matched layout
-    private var usesMusicPortraitLayout: Bool {
-        UIDevice.current.userInterfaceIdiom == .phone && verticalSizeClass == .regular
+    // iPhone uses the dedicated Music-matched layout for both portrait and landscape
+    private var usesMusicPlayerLayout: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
     }
     
     var body: some View {
         ZStack {
-            if usesMusicPortraitLayout {
-                MusicPortraitPlayer(
+            if usesMusicPlayerLayout {
+                MusicPlayerScreen(
                     expand: $expand,
                     showQueue: $showQueue,
                     showMenu: $showMenu,

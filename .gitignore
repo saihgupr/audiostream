@@ -38,6 +38,8 @@ import_from_mac.sh
 sampler.py
 deploy.sh
 deploy_ipad.sh
+restore_from_nas.sh
+RESTORE.md
 
 # Environment & Secrets
 .env

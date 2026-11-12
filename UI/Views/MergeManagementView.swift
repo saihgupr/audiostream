@@ -11,6 +11,8 @@ struct MergeManagementView: View {
     @ObservedObject var albumMergeService = AlbumMergeService.shared
     @ObservedObject var artistMergeService = ArtistMergeService.shared
     @State private var selectedTab: MergeTab = .albums
+    @State private var restoreSummary: String?
+    @State private var showRestoreAlert = false
     
     var body: some View {
         ZStack {
@@ -138,7 +140,32 @@ struct MergeManagementView: View {
             }
         }
         .navigationTitle("Manage Merged Items")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Restore") {
+                    restoreMerges()
+                }
+            }
+        }
+        .alert("Restore Merges", isPresented: $showRestoreAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(restoreSummary ?? "")
+        }
         .preferredColorScheme(.dark)
+    }
+    
+    private func restoreMerges() {
+        do {
+            if let result = try AppStateBackupService.shared.restoreAll() {
+                restoreSummary = result.summary
+            } else {
+                restoreSummary = "No backup found in /var/mobile/Documents."
+            }
+        } catch {
+            restoreSummary = error.localizedDescription
+        }
+        showRestoreAlert = true
     }
     
     private func deleteAlbumMerge(at offsets: IndexSet) {

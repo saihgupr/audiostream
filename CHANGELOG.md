@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - **Manual Artwork Search**: Added a dedicated search sheet to search Apple Music using custom search terms when automated tag matching needs manual adjustment.
 - **Track & Album Context Menus**: Added long-press context menus across library views and track lists for quick queuing, playing, and managing items.
 - **In-Place Album Merging**: Streamlined album merge mode with selection badges, primary target labels, and direct merge action without leaving the main library grid.
+- **Full App State Backup**: Settings > Backup & Restore saves the app's whole preferences domain to `Documents/audiostream_appstate.plist`, including the server URL, library source, volume, and both merge groups. It also saves automatically when the app goes to the background, and the NAS mirror copies the file off the device.
+- **Restore from Backup**: Settings > Backup & Restore and Settings > Manage Merged Items can restore the saved state. The restore prefers the copy made by the NAS restore, applies the domain, reloads the merge groups, and asks for a relaunch so connection and playback settings take effect.
 
 ### Fixed
 - **NAS-Only Streaming No Longer Wakes the iPhone**: the app now only sends RemoteCompanion wake requests and adds `iphone.local` as a fallback when the configured server is actually an iPhone. A NAS timeout no longer starts the iPhone streaming daemon.
