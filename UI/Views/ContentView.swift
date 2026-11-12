@@ -69,34 +69,16 @@ struct ContentView: View {
         }
         .edgesIgnoringSafeArea(.bottom) // This allows TabBar to go to the bottom edge
         .preferredColorScheme(.dark)
-        // iPad: Full screen cover so it takes up the entire iPad screen in landscape & portrait
+        // Full screen cover on every device: the iPhone player is full-bleed like Music and
+        // handles its own pull-down dismissal.
         .fullScreenCover(isPresented: Binding(
-            get: { isPad && navManager.showFullPlayer },
+            get: { navManager.showFullPlayer },
             set: { navManager.showFullPlayer = $0 }
         )) {
             NowPlayingView(expand: $navManager.showFullPlayer)
                 .environmentObject(audioService)
                 .environmentObject(navManager)
                 .environmentObject(connectionService)
-        }
-        // iPhone: Sheet presentation with large detent and pull-down dismissal to mini player
-        .sheet(isPresented: Binding(
-            get: { !isPad && navManager.showFullPlayer },
-            set: { navManager.showFullPlayer = $0 }
-        )) {
-            if #available(iOS 16.0, *) {
-                NowPlayingView(expand: $navManager.showFullPlayer)
-                    .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
-                    .environmentObject(audioService)
-                    .environmentObject(navManager)
-                    .environmentObject(connectionService)
-            } else {
-                NowPlayingView(expand: $navManager.showFullPlayer)
-                    .environmentObject(audioService)
-                    .environmentObject(navManager)
-                    .environmentObject(connectionService)
-            }
         }
         .environmentObject(navManager)
         .onAppear {

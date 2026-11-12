@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -13,6 +13,7 @@
 		15C2CC26F21F5154F563710B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D57E6EE7CBF4B9189B3D8E /* SettingsView.swift */; };
 		2E1ACC972D9E72D597F717FF /* CustomTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D33C311F9C555989A989779 /* CustomTabBar.swift */; };
 		3EC2E1EAD35D953737B19E32 /* NavigationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF783CE050941BD671121AB7 /* NavigationManager.swift */; };
+		4E6D3A1877B6F2056BF5C212 /* MusicPortraitPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 514D421B75D1AF1E1B93AC13 /* MusicPortraitPlayer.swift */; };
 		505366AE9087C7F09CB1BF64 /* AlbumMergeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B0D4C4EFC0A8C9334BA32 /* AlbumMergeService.swift */; };
 		535866131AE61E2E7B9E8001 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4EC156A523FAC0E4245A17E /* NowPlayingView.swift */; };
 		6516FFCCF2ED71EE7319B455 /* ArtistMergeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6626C77E404CACF36B9AB455 /* ArtistMergeService.swift */; };
@@ -22,6 +23,7 @@
 		8180F14024E8272F3680A0B9 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 687FFEAF52EED6FF10F668DB /* Models.swift */; };
 		83E0AFB0721D256F5D78EB56 /* ArtistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F243289D488403CFCACF1095 /* ArtistDetailView.swift */; };
 		8768DCF56F101FBE1AEF7058 /* AlbumCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCD93DC82E149A2CF77E359A /* AlbumCard.swift */; };
+		972F1A7DC36B132C48D4E55F /* MusicPlayerTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA4969CD87EF575514A90D0 /* MusicPlayerTheme.swift */; };
 		9BBDED647405E60B15983223 /* AlbumDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D050A3F9571FDCD100EE6920 /* AlbumDetailView.swift */; };
 		A13255E7FEBA65B2C4581B27 /* BlurView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 246B47B1281D616CA2C0D595 /* BlurView.swift */; };
 		A2B22AD8DA1A0CE03A0B98E6 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 37557F7B9234F5DB29554700 /* libsqlite3.tbd */; };
@@ -51,11 +53,13 @@
 		246B47B1281D616CA2C0D595 /* BlurView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurView.swift; sourceTree = "<group>"; };
 		2D33C311F9C555989A989779 /* CustomTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomTabBar.swift; sourceTree = "<group>"; };
 		37557F7B9234F5DB29554700 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
+		3BA4969CD87EF575514A90D0 /* MusicPlayerTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayerTheme.swift; sourceTree = "<group>"; };
 		3C28C27900778C629D57D3F7 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		454C549E188B245A24CA4305 /* AudioStreamApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamApp.swift; sourceTree = "<group>"; };
 		495B4AF9B214A4582DD88ECD /* AlbumMergeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumMergeSheet.swift; sourceTree = "<group>"; };
 		4F9C36768DC1D3125AFCCD15 /* SkeletonAlbumCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkeletonAlbumCard.swift; sourceTree = "<group>"; };
-		5A2D2E0F41A440C7BF6D57A8 /* AudioStream.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AudioStream.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		514D421B75D1AF1E1B93AC13 /* MusicPortraitPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPortraitPlayer.swift; sourceTree = "<group>"; };
+		5A2D2E0F41A440C7BF6D57A8 /* audiostream.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = audiostream.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5BD642ECE4A0DE7A00DAA193 /* ArtworkDownloadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkDownloadService.swift; sourceTree = "<group>"; };
 		6626C77E404CACF36B9AB455 /* ArtistMergeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistMergeService.swift; sourceTree = "<group>"; };
 		662ABF40F309031137CABBDB /* MergeManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeManagementView.swift; sourceTree = "<group>"; };
@@ -111,6 +115,7 @@
 				0DDE98AB62D37E830E897699 /* ContentView.swift */,
 				8539D5203DE5A881CF022542 /* LibraryView.swift */,
 				662ABF40F309031137CABBDB /* MergeManagementView.swift */,
+				514D421B75D1AF1E1B93AC13 /* MusicPortraitPlayer.swift */,
 				C4EC156A523FAC0E4245A17E /* NowPlayingView.swift */,
 				3C28C27900778C629D57D3F7 /* SearchView.swift */,
 				B1D57E6EE7CBF4B9189B3D8E /* SettingsView.swift */,
@@ -144,6 +149,7 @@
 				246B47B1281D616CA2C0D595 /* BlurView.swift */,
 				2D33C311F9C555989A989779 /* CustomTabBar.swift */,
 				731B94D53C25E1911EB981BC /* MiniPlayerView.swift */,
+				3BA4969CD87EF575514A90D0 /* MusicPlayerTheme.swift */,
 				DD8A706B90351DECC5C5EA86 /* PlaylistArtworkView.swift */,
 				E536E523A60646125D519178 /* RemoteImage.swift */,
 				4F9C36768DC1D3125AFCCD15 /* SkeletonAlbumCard.swift */,
@@ -174,7 +180,7 @@
 		A0AC0D0A6F1A426DE8226D41 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				5A2D2E0F41A440C7BF6D57A8 /* AudioStream.app */,
+				5A2D2E0F41A440C7BF6D57A8 /* audiostream.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -215,7 +221,7 @@
 			packageProductDependencies = (
 			);
 			productName = audiostream;
-			productReference = 5A2D2E0F41A440C7BF6D57A8 /* AudioStream.app */;
+			productReference = 5A2D2E0F41A440C7BF6D57A8 /* audiostream.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -243,6 +249,7 @@
 			);
 			mainGroup = 15430EABE0BEC74E29568BF7;
 			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -288,6 +295,8 @@
 				8180F14024E8272F3680A0B9 /* Models.swift in Sources */,
 				B69189906E5801D950223C45 /* MusicLibraryService.swift in Sources */,
 				1427A13B1A362B7AF8941D87 /* MusicMigrationService.swift in Sources */,
+				972F1A7DC36B132C48D4E55F /* MusicPlayerTheme.swift in Sources */,
+				4E6D3A1877B6F2056BF5C212 /* MusicPortraitPlayer.swift in Sources */,
 				11E099620CDEE15AB7D984B9 /* MusicServerManager.swift in Sources */,
 				3EC2E1EAD35D953737B19E32 /* NavigationManager.swift in Sources */,
 				535866131AE61E2E7B9E8001 /* NowPlayingView.swift in Sources */,
@@ -315,7 +324,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = App/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -374,7 +383,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -436,7 +445,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -460,7 +469,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = App/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

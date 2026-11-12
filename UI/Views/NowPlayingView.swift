@@ -31,9 +31,24 @@ struct NowPlayingView: View {
     @State private var showMenu = false
     @State private var showQueue = false
     @State private var audioOutputName: String = ""
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    
+    // iPhone portrait uses the dedicated Music-matched layout
+    private var usesMusicPortraitLayout: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone && verticalSizeClass == .regular
+    }
     
     var body: some View {
         ZStack {
+            if usesMusicPortraitLayout {
+                MusicPortraitPlayer(
+                    expand: $expand,
+                    showQueue: $showQueue,
+                    showMenu: $showMenu,
+                    audioOutputName: audioOutputName,
+                    showVolumeSlider: showVolumeSlider
+                )
+            } else {
             // Background Layer
             ZStack {
                 if let track = audioService.state.currentTrack, let url = track.artworkUrl {
@@ -659,6 +674,7 @@ struct NowPlayingView: View {
                     }
                 }
             }
+            }
             
             if showMenu {
                 // Capture taps outside the menu to dismiss it without propagating to other views
@@ -890,7 +906,7 @@ private struct AirPlayButton: View {
     }
 }
 
-private struct AirPlayRoutePicker: UIViewRepresentable {
+struct AirPlayRoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
         picker.tintColor = .clear
@@ -972,6 +988,16 @@ struct QueueView: View {
             .navigationTitle("Playing Next")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItemGroup(placement: .navigationBarLeading) {
+                    Button(action: { audioService.toggleShuffle() }) {
+                        Image(systemName: "shuffle")
+                            .foregroundColor(audioService.state.isShuffleEnabled ? .white : .gray)
+                    }
+                    Button(action: { audioService.cycleRepeatMode() }) {
+                        Image(systemName: audioService.state.repeatMode == .one ? "repeat.1" : "repeat")
+                            .foregroundColor(audioService.state.repeatMode != .off ? .white : .gray)
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         presentationMode.wrappedValue.dismiss()
