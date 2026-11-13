@@ -1282,6 +1282,19 @@ class AudioPlayerService: ObservableObject {
             }
             return
         }
+
+        if url.isFileURL {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let image = LocalFileArtworkCache.downscaledThumbnail(fromURL: url, maxPixelSize: 600)
+                        ?? UIImage(contentsOfFile: url.path) else { return }
+                DispatchQueue.main.async {
+                    guard let self = self, self.state.currentTrack?.id == trackId else { return }
+                    let mediaArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    self.updateNowPlayingInfo(artwork: mediaArtwork)
+                }
+            }
+            return
+        }
         
         // Check disk cache first for web URLs (http/https)
         if url.scheme == "http" || url.scheme == "https" {

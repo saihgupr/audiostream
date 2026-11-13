@@ -1,10 +1,12 @@
 import Foundation
 import AVFoundation
+import ImageIO
 import UIKit
 
 // MARK: - Artwork Cache
 
-/// Shared cache mapping track ID → extracted UIImage artwork, backed by disk storage.
+/// Shared cache mapping track ID → extracted UIImage artwork, backed by disk storage
+/// and lazy on-demand extraction from audio files.
 class LocalFileArtworkCache {
     static let shared = LocalFileArtworkCache()
     private let memoryCache: NSCache<NSString, UIImage> = {
@@ -14,30 +16,38 @@ class LocalFileArtworkCache {
         return c
     }()
     private let lock = NSLock()
-    
-    private let cacheDir: URL = {
+    private let diskWriteQueue = DispatchQueue(label: "com.audiostream.localartwork.disk", qos: .utility)
+    private let extractionSemaphore = DispatchSemaphore(value: 2)
+    private var audioFileURLs: [String: URL] = [:]
+    private var missingEmbeddedKeys = Set<String>()
+
+    private lazy var cacheDir: URL = {
         let urls = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
         let dir = urls.first!.appendingPathComponent("LocalArtworkCache")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
 
+    func registerAudioFile(_ url: URL, for key: String) {
+        lock.lock()
+        audioFileURLs[key] = url
+        lock.unlock()
+    }
+
     func set(_ image: UIImage, for key: String) {
-        // Downscale before caching in memory to avoid huge memory usage during scanning
+        // Downscale before caching in memory to avoid huge memory usage
         let downscaled = Self.downscaledThumbnail(from: image, maxPixelSize: 600)
         let cost = Int(downscaled.size.width * downscaled.size.height * 4)
         lock.lock()
         memoryCache.setObject(downscaled, forKey: key as NSString, cost: cost)
+        missingEmbeddedKeys.remove(key)
         lock.unlock()
-        
-        // Write to disk asynchronously if not already present
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+
+        diskWriteQueue.async { [weak self] in
             guard let self = self else { return }
             let fileURL = self.cacheDir.appendingPathComponent("\(key).jpg")
-            if !FileManager.default.fileExists(atPath: fileURL.path) {
-                if let data = downscaled.jpegData(compressionQuality: 0.75) {
-                    try? data.write(to: fileURL)
-                }
+            if let data = downscaled.jpegData(compressionQuality: 0.78) {
+                try? data.write(to: fileURL, options: .atomic)
             }
         }
     }
@@ -54,46 +64,145 @@ class LocalFileArtworkCache {
             lock.unlock()
             return cached
         }
+        let sourceURL = audioFileURLs[key]
+        let isMissing = missingEmbeddedKeys.contains(key)
         lock.unlock()
-        
+
         // Try reading from disk with downscaled thumbnail decoder
         let fileURL = cacheDir.appendingPathComponent("\(key).jpg")
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-        
-        if let thumb = Self.downscaledThumbnail(fromURL: fileURL, maxPixelSize: maxPixelSize) {
+        if FileManager.default.fileExists(atPath: fileURL.path),
+           let thumb = Self.downscaledThumbnail(fromURL: fileURL, maxPixelSize: maxPixelSize) {
             let cost = Int(thumb.size.width * thumb.size.height * 4)
             lock.lock()
             memoryCache.setObject(thumb, forKey: key as NSString, cost: cost)
             lock.unlock()
             return thumb
         }
-        
+
+        if let audioURL = sourceURL, !isMissing {
+            return extractAndCacheEmbeddedArtwork(from: audioURL, for: key, maxPixelSize: maxPixelSize)
+        }
+
         return nil
+    }
+
+    private func extractAndCacheEmbeddedArtwork(from audioURL: URL, for key: String, maxPixelSize: CGFloat) -> UIImage? {
+        extractionSemaphore.wait()
+        defer { extractionSemaphore.signal() }
+
+        lock.lock()
+        if let cached = memoryCache.object(forKey: key as NSString) {
+            lock.unlock()
+            return cached
+        }
+        let alreadyMissing = missingEmbeddedKeys.contains(key)
+        lock.unlock()
+        if alreadyMissing { return nil }
+
+        let fileURL = cacheDir.appendingPathComponent("\(key).jpg")
+        if FileManager.default.fileExists(atPath: fileURL.path),
+           let thumb = Self.downscaledThumbnail(fromURL: fileURL, maxPixelSize: maxPixelSize) {
+            let cost = Int(thumb.size.width * thumb.size.height * 4)
+            lock.lock()
+            memoryCache.setObject(thumb, forKey: key as NSString, cost: cost)
+            lock.unlock()
+            return thumb
+        }
+
+        var extractedData: Data?
+        autoreleasepool {
+            let asset = AVURLAsset(url: audioURL)
+            let allItems = asset.commonMetadata + asset.metadata
+            for item in allItems {
+                if item.commonKey == .commonKeyArtwork,
+                   let data = item.dataValue, !data.isEmpty {
+                    extractedData = data
+                    break
+                }
+                if let k = LocalFileLibraryScanner.metadataKeyString(for: item),
+                   k == "covr" || k == "APIC" || k == "PIC" || k == "artwork",
+                   let data = item.dataValue, !data.isEmpty {
+                    extractedData = data
+                    break
+                }
+            }
+        }
+
+        guard let data = extractedData else {
+            lock.lock()
+            missingEmbeddedKeys.insert(key)
+            lock.unlock()
+            return nil
+        }
+
+        // Decode directly at the target size via ImageIO rather than decoding full-res bitmaps.
+        let diskImage = Self.downscaledThumbnail(from: data, maxPixelSize: 600)
+            ?? UIImage(data: data).map { Self.downscaledThumbnail(from: $0, maxPixelSize: 600) }
+        guard let cachedImage = diskImage else {
+            lock.lock()
+            missingEmbeddedKeys.insert(key)
+            lock.unlock()
+            return nil
+        }
+
+        diskWriteQueue.async { [weak self] in
+            guard let self = self else { return }
+            let destURL = self.cacheDir.appendingPathComponent("\(key).jpg")
+            if !FileManager.default.fileExists(atPath: destURL.path),
+               let jpegData = cachedImage.jpegData(compressionQuality: 0.78) {
+                try? jpegData.write(to: destURL, options: .atomic)
+            }
+        }
+
+        let resultImage: UIImage
+        if maxPixelSize < 600, let smallThumb = Self.downscaledThumbnail(from: data, maxPixelSize: maxPixelSize) {
+            resultImage = smallThumb
+        } else {
+            resultImage = cachedImage
+        }
+
+        let cost = Int(resultImage.size.width * resultImage.size.height * 4)
+        lock.lock()
+        memoryCache.setObject(resultImage, forKey: key as NSString, cost: cost)
+        lock.unlock()
+        return resultImage
     }
 
     func clear() {
         lock.lock()
         memoryCache.removeAllObjects()
+        missingEmbeddedKeys.removeAll()
         lock.unlock()
     }
-    
+
     func clearDisk() {
         lock.lock()
         memoryCache.removeAllObjects()
+        missingEmbeddedKeys.removeAll()
+        audioFileURLs.removeAll()
         lock.unlock()
         try? FileManager.default.removeItem(at: cacheDir)
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
 
     static func downscaledThumbnail(fromURL url: URL, maxPixelSize: CGFloat) -> UIImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return downscaledThumbnail(fromSource: source, maxPixelSize: maxPixelSize)
+    }
+
+    static func downscaledThumbnail(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return downscaledThumbnail(fromSource: source, maxPixelSize: maxPixelSize)
+    }
+
+    private static func downscaledThumbnail(fromSource source: CGImageSource, maxPixelSize: CGFloat) -> UIImage? {
         let options: [CFString: Any] = [
             kCGImageSourceShouldCache: false,
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
             kCGImageSourceCreateThumbnailWithTransform: true
         ]
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return nil
         }
         return UIImage(cgImage: cgImage)
@@ -124,15 +233,21 @@ struct CachedTrack: Codable {
     let duration: TimeInterval
     let albumArtist: String?
     let trackNumber: Int?
-    let artworkUrlString: String?
+    var artworkUrlString: String?
     let fileModificationDate: Date
     let fileSize: Int64
+}
+
+private struct MetadataCacheData: Codable {
+    static let currentVersion = 2
+    let version: Int
+    let tracks: [String: CachedTrack]
 }
 
 // MARK: - Local Library Snapshot
 
 struct LocalLibraryCacheData: Codable {
-    static let currentVersion = 1
+    static let currentVersion = 2
     let version: Int
     let albums: [CachedLocalAlbum]
     let playlists: [Playlist]
@@ -243,6 +358,10 @@ class LocalLibraryDiskCache {
         
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
+            try? FileManager.default.createDirectory(
+                at: self.cacheFileUrl.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
             if let encoded = try? JSONEncoder().encode(cacheObj) {
                 try? encoded.write(to: self.cacheFileUrl, options: .atomic)
             }
@@ -273,6 +392,11 @@ class LocalLibraryDiskCache {
         
         for cachedAlbum in cacheObj.albums {
             let tracks = cachedAlbum.tracks.map { $0.track }
+            for track in tracks {
+                if track.artworkUrl?.scheme == "local-file-artwork", let streamUrl = track.streamUrl {
+                    LocalFileArtworkCache.shared.registerAudioFile(streamUrl, for: track.persistentId)
+                }
+            }
             albums.append(Album(
                 id: cachedAlbum.id,
                 title: cachedAlbum.title,
@@ -333,20 +457,85 @@ class LocalFileLibraryScanner {
         guard let data = try? Data(contentsOf: cacheFileUrl) else { return }
         do {
             let decoder = JSONDecoder()
-            self.persistentCache = try decoder.decode([String: CachedTrack].self, from: data)
+            let cacheObj = try decoder.decode(MetadataCacheData.self, from: data)
+            guard cacheObj.version == MetadataCacheData.currentVersion else {
+                try? FileManager.default.removeItem(at: cacheFileUrl)
+                return
+            }
+            self.persistentCache = cacheObj.tracks
         } catch {
-            print("Failed to decode local metadata cache: \(error)")
+            // Legacy unversioned caches may contain broken artwork URLs; rebuild cleanly.
+            try? FileManager.default.removeItem(at: cacheFileUrl)
+            self.persistentCache = [:]
         }
     }
 
     private func savePersistentCache() {
         do {
+            try FileManager.default.createDirectory(
+                at: cacheFileUrl.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
             let encoder = JSONEncoder()
-            let data = try encoder.encode(persistentCache)
-            try data.write(to: cacheFileUrl)
+            let payload = MetadataCacheData(version: MetadataCacheData.currentVersion, tracks: persistentCache)
+            let data = try encoder.encode(payload)
+            try data.write(to: cacheFileUrl, options: .atomic)
         } catch {
             print("Failed to save local metadata cache: \(error)")
         }
+    }
+
+    private static func stableHash64(_ string: String) -> UInt64 {
+        // FNV-1a 64-bit over UTF-8 bytes: stable across process launches.
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in string.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return hash
+    }
+
+    private static let folderArtworkCandidates = [
+        "cover.jpg", "folder.jpg", "cover.jpeg", "folder.jpeg",
+        "cover.png", "folder.png", "artwork.jpg", "artwork.png",
+        "Cover.jpg", "Folder.jpg", "Cover.png", "Folder.png"
+    ]
+
+    private static func folderArtworkURL(forDirectory dir: URL, cache: inout [String: URL?]) -> URL? {
+        if let cached = cache[dir.path] {
+            return cached
+        }
+        let fm = FileManager.default
+        let resolved = findFolderArtwork(in: dir, fileManager: fm)
+            ?? findParentAlbumArtwork(for: dir, fileManager: fm)
+        cache[dir.path] = resolved
+        return resolved
+    }
+
+    private static func findFolderArtwork(in dir: URL, fileManager: FileManager) -> URL? {
+        for candidate in folderArtworkCandidates {
+            let candidateURL = dir.appendingPathComponent(candidate)
+            if fileManager.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+        }
+        return nil
+    }
+
+    private static func findParentAlbumArtwork(for dir: URL, fileManager: FileManager) -> URL? {
+        let parent = dir.deletingLastPathComponent()
+        let rootPath = musicRoot.resolvingSymlinksInPath().path
+        let parentPath = parent.resolvingSymlinksInPath().path
+        guard parentPath != rootPath, parentPath.hasPrefix(rootPath + "/") else {
+            return nil
+        }
+        let dirName = dir.lastPathComponent.lowercased()
+        let isDiscSubfolder = dirName.hasPrefix("disc") || dirName.hasPrefix("disk") || dirName.hasPrefix("cd")
+        let isNestedAlbumSubdir = parent.deletingLastPathComponent().resolvingSymlinksInPath().path != rootPath
+        guard isDiscSubfolder || isNestedAlbumSubdir else {
+            return nil
+        }
+        return findFolderArtwork(in: parent, fileManager: fileManager)
     }
 
     func clearCache() {
@@ -394,54 +583,93 @@ class LocalFileLibraryScanner {
         var results: [Track] = []
         let audioExtensions: Set<String> = ["m4a", "mp3", "wav", "aac", "aiff", "alac", "flac"]
         var cacheUpdated = false
+        var newTracksBuilt = 0
         var foundCacheKeys = Set<String>()
+        var folderArtworkCache: [String: URL?] = [:]
 
         let resourceKeys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]
+        let resourceKeySet = Set(resourceKeys)
         if let enumerator = FileManager.default.enumerator(
             at: Self.musicRoot,
             includingPropertiesForKeys: resourceKeys,
             options: [.skipsHiddenFiles]
         ) {
             for case let fileURL as URL in enumerator {
-                let ext = fileURL.pathExtension.lowercased()
-                guard audioExtensions.contains(ext) else { continue }
-                
-                let values = try? fileURL.resourceValues(forKeys: Set(resourceKeys))
-                if values?.isRegularFile == false { continue }
-                let modDate = values?.contentModificationDate ?? Date(timeIntervalSince1970: 0)
-                let size = Int64(values?.fileSize ?? 0)
-                let cacheKey = fileURL.path
-                foundCacheKeys.insert(cacheKey)
-                
-                if let cached = persistentCache[cacheKey],
-                   cached.fileModificationDate == modDate,
-                   cached.fileSize == size {
-                    // Load from cache
-                    let rawHash = UInt64(bitPattern: Int64(truncatingIfNeeded: fileURL.path.hashValue))
-                    let safeId = Int64(bitPattern: rawHash & 0x7FFFFFFFFFFFFFFF)
-                    
-                    var track = Track(
-                        id: safeId,
-                        persistentId: cached.persistentId,
-                        title: cached.title,
-                        artist: cached.artist,
-                        album: cached.album,
-                        filename: cached.filename,
-                        duration: cached.duration,
-                        dateAdded: cached.fileModificationDate
-                    )
-                    track.albumArtist = cached.albumArtist
-                    track.trackNumber = cached.trackNumber ?? Track.extractTrackNumberFromFilename(cached.filename)
-                    track.streamUrl = fileURL
-                    if let artworkStr = cached.artworkUrlString {
-                        track.artworkUrl = URL(string: artworkStr)
+                autoreleasepool {
+                    let ext = fileURL.pathExtension.lowercased()
+                    guard audioExtensions.contains(ext) else { return }
+
+                    let values = try? fileURL.resourceValues(forKeys: resourceKeySet)
+                    if values?.isRegularFile == false { return }
+                    let modDate = values?.contentModificationDate ?? Date(timeIntervalSince1970: 0)
+                    let size = Int64(values?.fileSize ?? 0)
+                    let cacheKey = fileURL.path
+                    foundCacheKeys.insert(cacheKey)
+
+                    let dir = fileURL.deletingLastPathComponent()
+                    let folderArtwork = Self.folderArtworkURL(forDirectory: dir, cache: &folderArtworkCache)
+
+                    if var cached = persistentCache[cacheKey],
+                       cached.fileModificationDate == modDate,
+                       cached.fileSize == size {
+                        let rawHash = Self.stableHash64(fileURL.path)
+                        let safeId = Int64(bitPattern: rawHash & 0x7FFFFFFFFFFFFFFF)
+
+                        var resolvedArtworkUrl: URL?
+                        var needsReparse = false
+
+                        if let folderURL = folderArtwork {
+                            resolvedArtworkUrl = folderURL
+                        } else if let artworkStr = cached.artworkUrlString, let artURL = URL(string: artworkStr) {
+                            if artURL.isFileURL {
+                                if FileManager.default.fileExists(atPath: artURL.path) {
+                                    resolvedArtworkUrl = artURL
+                                } else {
+                                    needsReparse = true
+                                }
+                            } else {
+                                resolvedArtworkUrl = artURL
+                                if artURL.scheme == "local-file-artwork" {
+                                    LocalFileArtworkCache.shared.registerAudioFile(fileURL, for: cached.persistentId)
+                                }
+                            }
+                        }
+
+                        if !needsReparse {
+                            var track = Track(
+                                id: safeId,
+                                persistentId: cached.persistentId,
+                                title: cached.title,
+                                artist: cached.artist,
+                                album: cached.album,
+                                filename: cached.filename,
+                                duration: cached.duration,
+                                dateAdded: cached.fileModificationDate
+                            )
+                            track.albumArtist = cached.albumArtist
+                            track.trackNumber = cached.trackNumber ?? Track.extractTrackNumberFromFilename(cached.filename)
+                            track.streamUrl = fileURL
+                            track.artworkUrl = resolvedArtworkUrl
+
+                            if cached.artworkUrlString != resolvedArtworkUrl?.absoluteString {
+                                cached.artworkUrlString = resolvedArtworkUrl?.absoluteString
+                                persistentCache[cacheKey] = cached
+                                cacheUpdated = true
+                            }
+
+                            results.append(track)
+                            return
+                        }
                     }
-                    results.append(track)
-                } else {
-                    // Full parse
-                    if let track = buildTrack(from: fileURL, modDate: modDate, size: size) {
+
+                    // Full parse without decoding artwork; drain per-track AVURLAsset temporaries.
+                    if let track = buildTrack(from: fileURL, modDate: modDate, size: size, folderArtwork: folderArtwork) {
                         results.append(track)
                         cacheUpdated = true
+                        newTracksBuilt += 1
+                        if newTracksBuilt % 250 == 0 {
+                            savePersistentCache()
+                        }
                     }
                 }
             }
@@ -472,31 +700,24 @@ class LocalFileLibraryScanner {
 
     // MARK: - Private Helpers
 
-    private func buildTrack(from url: URL, modDate: Date, size: Int64) -> Track? {
+    private func buildTrack(from url: URL, modDate: Date, size: Int64, folderArtwork: URL?) -> Track? {
         let asset = AVURLAsset(url: url)
-        let meta = loadMetadata(from: asset)
+        let meta = loadMetadata(from: asset, checkEmbeddedArtwork: folderArtwork == nil)
 
-        let rawHash = UInt64(bitPattern: Int64(truncatingIfNeeded: url.path.hashValue))
+        let rawHash = Self.stableHash64(url.path)
         let safeId = Int64(bitPattern: rawHash & 0x7FFFFFFFFFFFFFFF)
         let trackId = "localfile-\(rawHash)"
 
-        // Extract artwork and cache it
-        if let artworkImage = meta.artwork {
-            LocalFileArtworkCache.shared.set(artworkImage, for: trackId)
-        }
-
-        // Fall back to folder.jpg / cover.jpg / folder.png in the same directory
-        if meta.artwork == nil {
-            let dir = url.deletingLastPathComponent()
-            let artworkCandidates = ["folder.jpg", "cover.jpg", "folder.png", "cover.png", "artwork.jpg"]
-            for candidate in artworkCandidates {
-                let candidateURL = dir.appendingPathComponent(candidate)
-                if FileManager.default.fileExists(atPath: candidateURL.path),
-                   let img = UIImage(contentsOfFile: candidateURL.path) {
-                    LocalFileArtworkCache.shared.set(img, for: trackId)
-                    break
-                }
-            }
+        // Avoid decoding images during the scan: point directly at folder cover files
+        // when present, or defer embedded artwork extraction until the item is rendered.
+        let artworkUrl: URL?
+        if let folderArtwork = folderArtwork {
+            artworkUrl = folderArtwork
+        } else if meta.hasEmbeddedArtwork {
+            LocalFileArtworkCache.shared.registerAudioFile(url, for: trackId)
+            artworkUrl = URL(string: "local-file-artwork://\(trackId)")
+        } else {
+            artworkUrl = nil
         }
 
         let cleanTitle = (meta.title ?? url.deletingPathExtension().lastPathComponent).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -517,7 +738,7 @@ class LocalFileLibraryScanner {
         track.albumArtist = cleanAlbumArtist
         track.trackNumber = meta.trackNumber ?? Track.extractTrackNumberFromFilename(url.lastPathComponent)
         track.streamUrl = url
-        track.artworkUrl = URL(string: "local-file-artwork://\(trackId)")
+        track.artworkUrl = artworkUrl
         
         // Save to persistent cache dictionary
         let cached = CachedTrack(
@@ -545,6 +766,8 @@ class LocalFileLibraryScanner {
             return "\(cleanAlbum)__\(albumArtist)"
         }
 
+        var folderArtworkCache: [String: URL?] = [:]
+
         return grouped.map { (_, albumTracks) -> Album in
             let sorted = albumTracks.sorted(by: Track.compareTrackOrder)
             let rep = sorted.first!
@@ -553,22 +776,17 @@ class LocalFileLibraryScanner {
             
             let latestDate = sorted.compactMap { $0.dateAdded }.max() ?? Date()
             
-            // Prefer first track with artwork, or look for cover.jpg/folder.jpg in album folder
-            var artworkUrl = sorted.compactMap { $0.artworkUrl }.first
+            // Prefer folder cover URLs (loaded lazily by ImageLoader), then embedded artwork URLs,
+            // falling back to scanning the representative track's directory if needed.
+            let trackArtworks = sorted.compactMap { $0.artworkUrl }
+            var artworkUrl = trackArtworks.first(where: { $0.isFileURL }) ?? trackArtworks.first
             if artworkUrl == nil, let streamUrl = rep.streamUrl {
-                let dir = streamUrl.deletingLastPathComponent()
-                let candidates = ["cover.jpg", "folder.jpg", "cover.png", "folder.png", "artwork.jpg"]
-                for c in candidates {
-                    let candUrl = dir.appendingPathComponent(c)
-                    if FileManager.default.fileExists(atPath: candUrl.path) {
-                        artworkUrl = candUrl
-                        break
-                    }
-                }
+                artworkUrl = Self.folderArtworkURL(forDirectory: streamUrl.deletingLastPathComponent(), cache: &folderArtworkCache)
             }
             
+            let albumHash = Self.stableHash64("\(cleanAlbum)\(albumArtist)") & 0x7FFFFFFFFFFFFFFF
             return Album(
-                id: "localfile-album-\(abs("\(cleanAlbum)\(albumArtist)".hashValue))",
+                id: "localfile-album-\(albumHash)",
                 title: cleanAlbum,
                 artist: albumArtist,
                 artworkUrl: artworkUrl,
@@ -587,10 +805,10 @@ class LocalFileLibraryScanner {
         var albumArtist: String?
         var album: String?
         var trackNumber: Int?
-        var artwork: UIImage?
+        var hasEmbeddedArtwork: Bool = false
     }
 
-    private func keyString(for item: AVMetadataItem) -> String? {
+    static func metadataKeyString(for item: AVMetadataItem) -> String? {
         if let str = item.key as? String {
             return str
         }
@@ -637,7 +855,7 @@ class LocalFileLibraryScanner {
         return nil
     }
 
-    private func loadMetadata(from asset: AVURLAsset) -> SongMeta {
+    private func loadMetadata(from asset: AVURLAsset, checkEmbeddedArtwork: Bool) -> SongMeta {
         var meta = SongMeta()
 
         let allItems = asset.commonMetadata + asset.metadata
@@ -651,15 +869,13 @@ class LocalFileLibraryScanner {
                 case .commonKeyAlbumName:
                     if meta.album == nil { meta.album = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) }
                 case .commonKeyArtwork:
-                    if meta.artwork == nil, let data = item.dataValue, let img = UIImage(data: data) {
-                        meta.artwork = img
-                    }
+                    if checkEmbeddedArtwork { meta.hasEmbeddedArtwork = true }
                 default:
                     break
                 }
             }
 
-            guard let key = keyString(for: item) else { continue }
+            guard let key = Self.metadataKeyString(for: item) else { continue }
             switch key {
             case "©ART", "TPE1", "artist":
                 if meta.artist == nil { meta.artist = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -673,10 +889,8 @@ class LocalFileLibraryScanner {
                 if meta.trackNumber == nil {
                     meta.trackNumber = parseTrackNumber(from: item)
                 }
-            case "covr", "APIC", "artwork":
-                if meta.artwork == nil, let data = item.dataValue, let img = UIImage(data: data) {
-                    meta.artwork = img
-                }
+            case "covr", "APIC", "PIC", "artwork":
+                if checkEmbeddedArtwork { meta.hasEmbeddedArtwork = true }
             default:
                 break
             }
