@@ -991,6 +991,7 @@ struct LibraryView: View {
         let allArt = albums.flatMap { $0.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
         self.artists = ArtistMergeService.shared.process(artists: allArt)
         self.generateSpecialPlaylists()
+        PlaylistArtworkView.precomputeCollages(for: self.playlists)
         ImageLoader.prewarm(urls: albums.prefix(30).compactMap { $0.artworkUrl })
     }
     
@@ -1081,6 +1082,7 @@ struct LibraryView: View {
                 self.playlists = loadedPlaylists
                 self.generateSpecialPlaylists()
             }
+            PlaylistArtworkView.precomputeCollages(for: self.playlists)
             
             // Progressive top-to-bottom streaming so top albums are visible immediately
             self.streamAlbumsProgressively(loadedAlbums)

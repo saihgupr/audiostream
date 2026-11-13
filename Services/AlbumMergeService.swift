@@ -51,12 +51,24 @@ struct MergeGroup: Codable, Identifiable, Hashable {
 class AlbumMergeService: ObservableObject {
     static let shared = AlbumMergeService()
     
-    @Published var mergeGroups: [MergeGroup] = []
+    private struct NormalizedPair: Hashable {
+        let title: String
+        let artist: String
+    }
+
+    @Published var mergeGroups: [MergeGroup] = [] {
+        didSet {
+            rebuildLookupIndex()
+        }
+    }
     
     private let storageKey = "com.audiostream.albumMergeGroups"
+    private let indexLock = NSLock()
+    private var memberLookup: [NormalizedPair: (index: Int, group: MergeGroup)] = [:]
     
     private init() {
         loadGroups()
+        rebuildLookupIndex()
         syncMergeGroupsToSharedPath()
     }
     
@@ -237,24 +249,66 @@ class AlbumMergeService: ObservableObject {
         return result.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
     
+    private static func normalize(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: .caseInsensitive, locale: .current)
+    }
+
+    private func rebuildLookupIndex() {
+        var lookup: [NormalizedPair: (index: Int, group: MergeGroup)] = [:]
+        lookup.reserveCapacity(mergeGroups.reduce(0) { $0 + $1.members.count })
+
+        for (index, group) in mergeGroups.enumerated() {
+            for member in group.members {
+                let pair = NormalizedPair(
+                    title: Self.normalize(member.title),
+                    artist: Self.normalize(member.artist)
+                )
+                if lookup[pair] == nil {
+                    lookup[pair] = (index, group)
+                }
+            }
+        }
+
+        indexLock.lock()
+        memberLookup = lookup
+        indexLock.unlock()
+    }
+
+    private func lookupMergeGroup(album: String, artist: String, albumArtist: String?) -> MergeGroup? {
+        let normalizedAlbum = Self.normalize(album)
+        let normalizedArtist = Self.normalize(artist)
+        let normalizedAlbumArtist = albumArtist.map(Self.normalize)
+
+        indexLock.lock()
+        let firstMatch = memberLookup[NormalizedPair(title: normalizedAlbum, artist: normalizedArtist)]
+        let secondMatch = normalizedAlbumArtist.flatMap {
+            memberLookup[NormalizedPair(title: normalizedAlbum, artist: $0)]
+        }
+        indexLock.unlock()
+
+        switch (firstMatch, secondMatch) {
+        case let (a?, b?):
+            return a.index <= b.index ? a.group : b.group
+        case let (a?, nil):
+            return a.group
+        case let (nil, b?):
+            return b.group
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    func resolvedAlbumAndArtist(for track: Track) -> (album: String, artist: String) {
+        if let group = lookupMergeGroup(album: track.album, artist: track.artist, albumArtist: track.albumArtist) {
+            return (group.targetTitle, group.targetArtist)
+        }
+        return (track.album, track.artist)
+    }
+
     func process(tracks: [Track]) -> [Track] {
         return tracks.map { track in
-            let trackAlbum = track.album.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trackArtist = track.artist.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trackAlbumArtist = track.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
-            
-            if let group = mergeGroups.first(where: { group in
-                group.members.contains(where: { member in
-                    let memberTitle = member.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let memberArtist = member.artist.trimmingCharacters(in: .whitespacesAndNewlines)
-                    
-                    let titleMatch = memberTitle.localizedCaseInsensitiveCompare(trackAlbum) == .orderedSame
-                    let artistMatch = memberArtist.localizedCaseInsensitiveCompare(trackArtist) == .orderedSame ||
-                        (trackAlbumArtist != nil && memberArtist.localizedCaseInsensitiveCompare(trackAlbumArtist!) == .orderedSame)
-                    
-                    return titleMatch && artistMatch
-                })
-            }) {
+            if let group = lookupMergeGroup(album: track.album, artist: track.artist, albumArtist: track.albumArtist) {
                 var updated = track
                 updated.album = group.targetTitle
                 updated.artist = group.targetArtist
