@@ -9,6 +9,12 @@ struct PlaylistArtworkView: View {
     var fallbackSystemName: String = "music.note.list"
     var fallbackBgColor: Color = Color.gray.opacity(0.3)
     var fallbackFgColor: Color = .white
+
+    @State private var cachedUrls: [URL] = []
+
+    private var cacheSignature: String {
+        "\(playlistId)|\(tracks.count)|\(tracks.first?.persistentId ?? "")|\(tracks.first?.artworkUrl?.absoluteString ?? "")"
+    }
     
     private func stableHash(_ string: String) -> Int {
         var hash = 5381
@@ -63,7 +69,7 @@ struct PlaylistArtworkView: View {
         return cleanAlbum
     }
 
-    private var artworkUrls: [URL] {
+    private func computeArtworkUrls() -> [URL] {
         let processedTracks = AlbumMergeService.shared.process(tracks: tracks)
         
         // Group tracks by unique album key
@@ -110,7 +116,7 @@ struct PlaylistArtworkView: View {
     }
     
     var body: some View {
-        let urls = artworkUrls
+        let urls = cachedUrls
         
         Group {
             if urls.isEmpty {
@@ -176,6 +182,14 @@ struct PlaylistArtworkView: View {
                 }
                 .frame(width: size, height: size)
             }
+        }
+        .onAppear {
+            if cachedUrls.isEmpty && !tracks.isEmpty {
+                cachedUrls = computeArtworkUrls()
+            }
+        }
+        .onChange(of: cacheSignature) { _ in
+            cachedUrls = computeArtworkUrls()
         }
     }
 }

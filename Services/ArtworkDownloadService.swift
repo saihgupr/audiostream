@@ -243,38 +243,34 @@ class ArtworkDownloadService {
     
     private func saveArtworkLocally(data: Data, image: UIImage, for album: Album) -> URL {
         let fm = FileManager.default
-        
-        // 1. Permanent documents directory: Documents/AlbumArtwork/<albumId>.jpg
+
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
         let artworkDir = docs.appendingPathComponent("AlbumArtwork", isDirectory: true)
-        try? fm.createDirectory(at: artworkDir, withIntermediateDirectories: true)
-        
-        let safeKey = album.id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "\(abs(album.title.hashValue))"
+        let safeKey = album.id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ImageLoader.stableFilename(for: album.title)
         let persistentFileUrl = artworkDir.appendingPathComponent("\(safeKey).jpg")
-        try? data.write(to: persistentFileUrl, options: .atomic)
-        
-        // 2. If album has local file tracks in AudioStreamMusic, save cover.jpg directly into folder
-        var localCoverUrl: URL? = nil
+
+        // 1. Prefer writing cover.jpg directly inside the album folder in AudioStreamMusic
+        // so we don't store a duplicate copy under Documents/AlbumArtwork.
         for track in album.tracks {
             if let streamUrl = track.streamUrl, streamUrl.isFileURL {
                 let folder = streamUrl.deletingLastPathComponent()
                 if fm.fileExists(atPath: folder.path) {
                     let coverJpg = folder.appendingPathComponent("cover.jpg")
-                    try? data.write(to: coverJpg, options: .atomic)
-                    localCoverUrl = coverJpg
-                    break
+                    if (try? data.write(to: coverJpg, options: .atomic)) != nil {
+                        if fm.fileExists(atPath: persistentFileUrl.path) {
+                            try? fm.removeItem(at: persistentFileUrl)
+                        }
+                        notifyDaemonRescan()
+                        return coverJpg
+                    }
                 }
             }
         }
 
-        // Notify the daemon so a newly saved cover.jpg is picked up on
-        // rescan. Best-effort fire-and-forget: silently ignored when no
-        // server is configured or reachable (local-only use).
-        if localCoverUrl != nil {
-            notifyDaemonRescan()
-        }
-
-        return localCoverUrl ?? persistentFileUrl
+        // 2. Fallback for remote/Apple Music albums without a writable local album folder
+        try? fm.createDirectory(at: artworkDir, withIntermediateDirectories: true)
+        try? data.write(to: persistentFileUrl, options: .atomic)
+        return persistentFileUrl
     }
     
     private func notifyDaemonRescan() {
@@ -286,22 +282,27 @@ class ArtworkDownloadService {
     }
 
     private func populateCaches(image: UIImage, finalUrl: URL, album: Album) {
-        // 1. Update LocalFileArtworkCache for album ID and all tracks
-        LocalFileArtworkCache.shared.set(image, for: album.id)
+        let isFolderCover = finalUrl.lastPathComponent == "cover.jpg"
+        let predecoded = ImageLoader.predecode(LocalFileArtworkCache.downscaledThumbnail(from: image, maxPixelSize: 350))
+
+        // 1. Update LocalFileArtworkCache in memory (skip writing redundant per-track JPEGs when cover.jpg exists)
+        LocalFileArtworkCache.shared.set(image, for: album.id, memoryOnly: isFolderCover)
         for track in album.tracks {
-            LocalFileArtworkCache.shared.set(image, for: track.persistentId)
+            LocalFileArtworkCache.shared.set(image, for: track.persistentId, memoryOnly: isFolderCover)
         }
-        
-        // 2. Update ImageLoader memory cache for all relevant keys
-        ImageLoader.setCachedImage(image, for: finalUrl.absoluteString)
+
+        // 2. Clear any old disk thumbnail for replaced artwork, then seed ImageLoader memory cache
+        ImageLoader.removeDiskCache(for: finalUrl)
+        ImageLoader.setCachedImage(predecoded, for: finalUrl.absoluteString)
         if let existingArtworkUrl = album.artworkUrl {
-            ImageLoader.setCachedImage(image, for: existingArtworkUrl.absoluteString)
+            ImageLoader.removeDiskCache(for: existingArtworkUrl)
+            ImageLoader.setCachedImage(predecoded, for: existingArtworkUrl.absoluteString)
         }
         for track in album.tracks {
             if let tArt = track.artworkUrl {
-                ImageLoader.setCachedImage(image, for: tArt.absoluteString)
+                ImageLoader.setCachedImage(predecoded, for: tArt.absoluteString)
             }
-            ImageLoader.setCachedImage(image, for: "local-file-artwork://\(track.persistentId)")
+            ImageLoader.setCachedImage(predecoded, for: "local-file-artwork://\(track.persistentId)")
         }
         
         // 3. Clear LocalFileLibraryScanner memory cache so next read uses new artwork

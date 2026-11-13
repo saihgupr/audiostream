@@ -136,9 +136,11 @@ class ArtistMergeService: ObservableObject {
     
     func process(artists: [String]) -> [String] {
         var uniqueArtists: [String] = []
+        var seenLower = Set<String>()
         for artist in artists {
             let canonical = canonicalArtist(for: artist)
-            if !uniqueArtists.contains(where: { $0.localizedCaseInsensitiveCompare(canonical) == .orderedSame }) {
+            let key = canonical.lowercased()
+            if seenLower.insert(key).inserted {
                 uniqueArtists.append(canonical)
             }
         }

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 enum LibrarySource: String, Codable, CaseIterable, Identifiable {
     case remote
@@ -123,7 +124,7 @@ extension Track {
     }
 }
 
-struct Album: Identifiable, Codable {
+struct Album: Identifiable, Codable, Equatable {
     let id: String
     var title: String
     var artist: String
@@ -160,14 +161,97 @@ enum RepeatMode: String, Codable, CaseIterable {
     case one
 }
 
+final class PlaybackProgress: ObservableObject {
+    @Published var currentTime: TimeInterval = 0
+}
+
 struct PlaybackState {
     var isPlaying: Bool = false
     var currentTrack: Track?
-    var currentTime: TimeInterval = 0
-    var duration: TimeInterval = 0
     var volume: Float = 1.0
     var isShuffleEnabled: Bool = false
     var repeatMode: RepeatMode = .all
+}
+
+/// Shared storage-bounding utilities for disk caches and temporary logs.
+enum AppCacheStorage {
+    private static let maintenanceQueue = DispatchQueue(label: "com.audiostream.cache.maintenance", qos: .utility)
+
+    /// Trims the oldest files (by access/modification date) in a cache directory when total size exceeds `maxBytes`.
+    static func pruneDirectory(_ directory: URL, maxBytes: UInt64, targetBytes: UInt64) {
+        maintenanceQueue.async {
+            let fm = FileManager.default
+            let keys: Set<URLResourceKey> = [
+                .isRegularFileKey,
+                .fileSizeKey,
+                .contentAccessDateKey,
+                .contentModificationDateKey
+            ]
+            guard let urls = try? fm.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles]
+            ) else { return }
+
+            var entries: [(url: URL, size: UInt64, date: Date)] = []
+            entries.reserveCapacity(urls.count)
+            var totalBytes: UInt64 = 0
+
+            for url in urls {
+                guard let values = try? url.resourceValues(forKeys: keys),
+                      values.isRegularFile == true else { continue }
+                let size = UInt64(max(0, values.fileSize ?? 0))
+                let date = values.contentAccessDate ?? values.contentModificationDate ?? .distantPast
+                totalBytes &+= size
+                entries.append((url, size, date))
+            }
+
+            guard totalBytes > maxBytes else { return }
+            entries.sort { $0.date < $1.date }
+
+            for entry in entries {
+                guard totalBytes > targetBytes else { break }
+                if (try? fm.removeItem(at: entry.url)) != nil {
+                    totalBytes = totalBytes > entry.size ? (totalBytes - entry.size) : 0
+                }
+            }
+        }
+    }
+
+    /// Appends a timestamped log line asynchronously while keeping the log file bounded to `maxBytes`.
+    static func appendBoundedLog(_ message: String, to logPath: String, maxBytes: UInt64 = 256 * 1024) {
+        let timestampDate = Date()
+        maintenanceQueue.async {
+            let timestamp = DateFormatter.localizedString(from: timestampDate, dateStyle: .short, timeStyle: .medium)
+            let logMessage = "[\(timestamp)] \(message)\n"
+            let fm = FileManager.default
+            if let attrs = try? fm.attributesOfItem(atPath: logPath),
+               let fileSize = attrs[.size] as? UInt64,
+               fileSize >= maxBytes {
+                // Trim to the trailing half instead of deleting everything so recent context survives.
+                if let handle = FileHandle(forReadingAtPath: logPath) {
+                    let keepBytes = maxBytes / 2
+                    let offset = fileSize > keepBytes ? fileSize - keepBytes : 0
+                    try? handle.seek(toOffset: offset)
+                    let tail = handle.readDataToEndOfFile()
+                    handle.closeFile()
+                    try? tail.write(to: URL(fileURLWithPath: logPath), options: .atomic)
+                } else {
+                    try? fm.removeItem(atPath: logPath)
+                }
+            }
+
+            if let fileHandle = FileHandle(forWritingAtPath: logPath) {
+                fileHandle.seekToEndOfFile()
+                if let data = logMessage.data(using: .utf8) {
+                    fileHandle.write(data)
+                }
+                fileHandle.closeFile()
+            } else {
+                try? logMessage.write(toFile: logPath, atomically: true, encoding: .utf8)
+            }
+        }
+    }
 }
 
 extension Notification.Name {

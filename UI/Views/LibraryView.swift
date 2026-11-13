@@ -37,7 +37,6 @@ struct LibraryView: View {
     @State private var selectedCategory: LibraryCategory = .albums
     @State private var artistSearchQuery = ""
     @State private var songSearchQuery = ""
-    @State private var albumSearchQuery = ""
     @State private var selectedAlbum: Album? = nil
     @State private var navigateToAlbumActive: Bool = false
     @State private var selectedAlbumForMerge: Album? = nil
@@ -434,11 +433,11 @@ struct LibraryView: View {
                             VStack(spacing: 0) {
                                 HStack {
                                     Image(systemName: "magnifyingglass").foregroundColor(.gray)
-                                    TextField("Search Albums", text: $albumSearchQuery)
+                                    TextField("Search Albums", text: $viewModel.albumSearchQuery)
                                     .textFieldStyle(PlainTextFieldStyle())
                                     .foregroundColor(.white)
-                                    if !albumSearchQuery.isEmpty {
-                                        Button(action: { albumSearchQuery = "" }) {
+                                    if !viewModel.albumSearchQuery.isEmpty {
+                                        Button(action: { viewModel.albumSearchQuery = "" }) {
                                             Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
                                         }
                                     }
@@ -458,11 +457,7 @@ struct LibraryView: View {
                                     .frame(width: 0, height: 0)
                                 )
                                 
-                                let filteredAlbums = viewModel.albums.filter {
-                                    albumSearchQuery.isEmpty ? true :
-                                    $0.title.localizedCaseInsensitiveContains(albumSearchQuery) ||
-                                    $0.artist.localizedCaseInsensitiveContains(albumSearchQuery)
-                                }
+                                let filteredAlbums = viewModel.filteredAlbums
                                 
                                 if viewModel.albums.isEmpty && (viewModel.isLoading || connectionService.isAutoConnecting) {
                                     LazyVGrid(columns: columns, spacing: 16) {
@@ -870,10 +865,21 @@ struct LibraryView: View {
 }
 
 @MainActor class LibraryViewModel: ObservableObject {
-    @Published var albums: [Album] = []
+    @Published var albums: [Album] = [] {
+        didSet { updateFilteredAlbums() }
+    }
+    @Published var albumSearchQuery: String = "" {
+        didSet { updateFilteredAlbums() }
+    }
+    @Published private(set) var filteredAlbums: [Album] = []
     @Published var playlists: [Playlist] = []
     @Published var artists: [String] = []
-    @Published var allTracks: [Track] = []
+    @Published var allTracks: [Track] = [] {
+        didSet {
+            tracksByArtistIndex = [:]
+            tracksByArtistIndexBuilt = false
+        }
+    }
     @Published var isLoading: Bool = false
     @Published var message: String?
     let loadingFinished = PassthroughSubject<Void, Never>()
@@ -883,29 +889,60 @@ struct LibraryView: View {
     private var pendingLoadTask: Task<Void, Never>? = nil
     private var debounceTask: Task<Void, Never>? = nil
     private var albumStreamingTask: Task<Void, Never>? = nil
+    private var tracksByArtistIndex: [String: [Track]] = [:]
+    private var tracksByArtistIndexBuilt: Bool = false
     
     init() {
         loadCacheSynchronously()
+        ArtistMergeService.shared.$mergeGroups
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.tracksByArtistIndex = [:]
+                self?.tracksByArtistIndexBuilt = false
+            }
+            .store(in: &cancellables)
+    }
+
+    private func updateFilteredAlbums() {
+        let query = albumSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            filteredAlbums = albums
+        } else {
+            filteredAlbums = albums.filter {
+                $0.title.localizedCaseInsensitiveContains(query) ||
+                $0.artist.localizedCaseInsensitiveContains(query)
+            }
+        }
     }
     
     func streamAlbumsProgressively(_ targetAlbums: [Album]) {
         albumStreamingTask?.cancel()
+
+        // Avoid redundant grid invalidations when a background scan matches cached albums
+        if self.albums == targetAlbums {
+            ImageLoader.prewarm(urls: targetAlbums.prefix(30).compactMap { $0.artworkUrl })
+            return
+        }
         
         // If the album counts are identical or new list is small, publish immediately
         if targetAlbums.count <= 20 || (self.albums.count == targetAlbums.count && self.albums.first?.id == targetAlbums.first?.id) {
             self.albums = targetAlbums
+            ImageLoader.prewarm(urls: targetAlbums.prefix(30).compactMap { $0.artworkUrl })
             return
         }
         
         // If we already had cached albums rendered, update in place without flashing empty
         if !self.albums.isEmpty {
             self.albums = targetAlbums
+            ImageLoader.prewarm(urls: targetAlbums.prefix(30).compactMap { $0.artworkUrl })
             return
         }
         
         // Cold start: publish the top 16 albums immediately so visible rows appear instantly
         let initialChunkSize = 16
         self.albums = Array(targetAlbums.prefix(initialChunkSize))
+        ImageLoader.prewarm(urls: targetAlbums.prefix(30).compactMap { $0.artworkUrl })
         
         // Stream subsequent chunks progressively down the screen without blocking
         albumStreamingTask = Task { @MainActor [weak self] in
@@ -954,6 +991,7 @@ struct LibraryView: View {
         let allArt = albums.flatMap { $0.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
         self.artists = ArtistMergeService.shared.process(artists: allArt)
         self.generateSpecialPlaylists()
+        ImageLoader.prewarm(urls: albums.prefix(30).compactMap { $0.artworkUrl })
     }
     
     func loadData(connectionService: ServerConnectionService, clearData: Bool = false, forceRefresh: Bool = false) {
@@ -1171,20 +1209,42 @@ struct LibraryView: View {
         self.allTracks = sortedTracksWithDates.map { $0.track }
     }
     
-    func tracksForArtist(_ artist: String) -> [Track] {
-        let targetMembers = ArtistMergeService.shared.allMemberArtists(for: artist)
-        return allTracks.filter { track in
-            let contributors = track.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            return contributors.contains(where: { contributor in
-                targetMembers.contains(where: { $0.localizedCaseInsensitiveCompare(contributor) == .orderedSame }) ||
-                ArtistMergeService.shared.canonicalArtist(for: contributor).localizedCaseInsensitiveCompare(artist) == .orderedSame
-            })
-        }.sorted { lhs, rhs in
-            if lhs.album != rhs.album {
-                return lhs.album.localizedCaseInsensitiveCompare(rhs.album) == .orderedAscending
+    private func buildArtistTrackIndexIfNeeded() {
+        guard !tracksByArtistIndexBuilt else { return }
+        tracksByArtistIndexBuilt = true
+        var grouped: [String: [Track]] = [:]
+        var seenPerArtist: [String: Set<String>] = [:]
+
+        for track in allTracks {
+            let contributors = track.artist.split(separator: ",")
+            for raw in contributors {
+                let canonical = ArtistMergeService.shared.canonicalArtist(for: String(raw))
+                let key = canonical.lowercased()
+                guard !key.isEmpty else { continue }
+                if seenPerArtist[key, default: []].insert(track.persistentId).inserted {
+                    grouped[key, default: []].append(track)
+                }
             }
-            return Track.compareTrackOrder(lhs, rhs)
         }
+
+        for (key, tracks) in grouped {
+            grouped[key] = tracks.sorted { lhs, rhs in
+                if lhs.album != rhs.album {
+                    return lhs.album.localizedCaseInsensitiveCompare(rhs.album) == .orderedAscending
+                }
+                return Track.compareTrackOrder(lhs, rhs)
+            }
+        }
+        tracksByArtistIndex = grouped
+    }
+
+    func tracksForArtist(_ artist: String) -> [Track] {
+        buildArtistTrackIndexIfNeeded()
+        let canonical = ArtistMergeService.shared.canonicalArtist(for: artist).lowercased()
+        if let cached = tracksByArtistIndex[canonical] {
+            return cached
+        }
+        return tracksByArtistIndex[artist.trimmingCharacters(in: .whitespaces).lowercased()] ?? []
     }
     
     func removeAlbumState(_ album: Album) {

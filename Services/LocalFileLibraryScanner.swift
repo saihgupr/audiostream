@@ -9,10 +9,20 @@ import UIKit
 /// and lazy on-demand extraction from audio files.
 class LocalFileArtworkCache {
     static let shared = LocalFileArtworkCache()
+    private static let maxDiskCacheBytes: UInt64 = 30 * 1024 * 1024
+    private static let targetDiskCacheBytes: UInt64 = 20 * 1024 * 1024
+
     private let memoryCache: NSCache<NSString, UIImage> = {
         let c = NSCache<NSString, UIImage>()
-        c.countLimit = 150
-        c.totalCostLimit = 60 * 1024 * 1024 // 60 MB
+        c.countLimit = 60
+        c.totalCostLimit = 20 * 1024 * 1024 // 20 MB (ImageLoader holds the primary 350px thumbnail cache)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            c.removeAllObjects()
+        }
         return c
     }()
     private let lock = NSLock()
@@ -20,13 +30,29 @@ class LocalFileArtworkCache {
     private let extractionSemaphore = DispatchSemaphore(value: 2)
     private var audioFileURLs: [String: URL] = [:]
     private var missingEmbeddedKeys = Set<String>()
+    private var writeCountSincePrune = 0
 
     private lazy var cacheDir: URL = {
         let urls = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
         let dir = urls.first!.appendingPathComponent("LocalArtworkCache")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        AppCacheStorage.pruneDirectory(dir, maxBytes: Self.maxDiskCacheBytes, targetBytes: Self.targetDiskCacheBytes)
         return dir
     }()
+
+    private func recordDiskWrite() {
+        lock.lock()
+        writeCountSincePrune += 1
+        let shouldPrune = writeCountSincePrune >= 25
+        if shouldPrune {
+            writeCountSincePrune = 0
+        }
+        lock.unlock()
+
+        if shouldPrune {
+            AppCacheStorage.pruneDirectory(cacheDir, maxBytes: Self.maxDiskCacheBytes, targetBytes: Self.targetDiskCacheBytes)
+        }
+    }
 
     func registerAudioFile(_ url: URL, for key: String) {
         lock.lock()
@@ -34,20 +60,23 @@ class LocalFileArtworkCache {
         lock.unlock()
     }
 
-    func set(_ image: UIImage, for key: String) {
+    func set(_ image: UIImage, for key: String, memoryOnly: Bool = false) {
         // Downscale before caching in memory to avoid huge memory usage
-        let downscaled = Self.downscaledThumbnail(from: image, maxPixelSize: 600)
+        let downscaled = ImageLoader.predecode(Self.downscaledThumbnail(from: image, maxPixelSize: 600))
         let cost = Int(downscaled.size.width * downscaled.size.height * 4)
         lock.lock()
         memoryCache.setObject(downscaled, forKey: key as NSString, cost: cost)
         missingEmbeddedKeys.remove(key)
         lock.unlock()
 
+        guard !memoryOnly else { return }
+
         diskWriteQueue.async { [weak self] in
             guard let self = self else { return }
             let fileURL = self.cacheDir.appendingPathComponent("\(key).jpg")
             if let data = downscaled.jpegData(compressionQuality: 0.78) {
                 try? data.write(to: fileURL, options: .atomic)
+                self.recordDiskWrite()
             }
         }
     }
@@ -151,6 +180,7 @@ class LocalFileArtworkCache {
             if !FileManager.default.fileExists(atPath: destURL.path),
                let jpegData = cachedImage.jpegData(compressionQuality: 0.78) {
                 try? jpegData.write(to: destURL, options: .atomic)
+                self.recordDiskWrite()
             }
         }
 
@@ -205,7 +235,7 @@ class LocalFileArtworkCache {
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return nil
         }
-        return UIImage(cgImage: cgImage)
+        return ImageLoader.predecode(UIImage(cgImage: cgImage))
     }
 
     static func downscaledThumbnail(from image: UIImage, maxPixelSize: CGFloat) -> UIImage {

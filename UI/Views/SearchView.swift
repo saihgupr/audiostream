@@ -125,24 +125,31 @@ class SearchViewModel: ObservableObject {
     @Published var query: String = ""
     @Published var tracks: [Track] = []
     
-    private var cancellables = Set<AnyCancellable>()
+    private var searchTask: Task<Void, Never>?
+    private var searchCancellable: AnyCancellable?
     
     func search(query: String, connectionService: ServerConnectionService) {
+        searchTask?.cancel()
+        searchCancellable?.cancel()
+
         guard !query.isEmpty else {
             self.tracks = []
             return
         }
         
-        let service = MusicLibraryService(connectionService: connectionService)
-        
-        service.search(query: query)
-            .sink(receiveCompletion: { [weak self] completion in
-                if case .failure = completion {
-                    self?.tracks = []
-                }
-            }, receiveValue: { [weak self] tracks in
-                self?.tracks = tracks
-            })
-            .store(in: &cancellables)
+        searchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard let self = self, !Task.isCancelled else { return }
+
+            let service = MusicLibraryService(connectionService: connectionService)
+            self.searchCancellable = service.search(query: query)
+                .sink(receiveCompletion: { [weak self] completion in
+                    if case .failure = completion {
+                        self?.tracks = []
+                    }
+                }, receiveValue: { [weak self] tracks in
+                    self?.tracks = tracks
+                })
+        }
     }
 }

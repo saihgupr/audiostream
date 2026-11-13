@@ -221,14 +221,14 @@ struct AlbumDetailView: View {
             
             // Track List Section
             Section {
-                ForEach(album.tracks) { track in
+                ForEach(Array(album.tracks.enumerated()), id: \.element.id) { index, track in
                     HStack {
                         if let current = audioService.state.currentTrack, current.persistentId == track.persistentId {
                             Image(systemName: "speaker.wave.3.fill")
                                 .foregroundColor(.white)
                                 .frame(width: 30)
                         } else {
-                            Text("\(album.tracks.firstIndex(of: track)! + 1)")
+                            Text("\(index + 1)")
                                 .font(.subheadline)
                                 .foregroundColor(.gray)
                                 .frame(width: 30)

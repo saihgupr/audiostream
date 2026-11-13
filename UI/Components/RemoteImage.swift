@@ -6,34 +6,66 @@ class ImageLoader: ObservableObject {
     @Published var image: UIImage?
     private var cancellable: AnyCancellable?
     private var currentURL: URL?
-    
-    // Memory cache to prevent redundant fetches and enable 60fps smooth scrolling
+
+    private static let diskWriteQueue = DispatchQueue(label: "com.audiostream.imagecache.disk", qos: .utility)
+    private static let pruneLock = NSLock()
+    private static var writeCountSincePrune = 0
+    private static let maxDiskCacheBytes: UInt64 = 40 * 1024 * 1024
+    private static let targetDiskCacheBytes: UInt64 = 28 * 1024 * 1024
+
+    private static let prewarmQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "com.audiostream.artwork.prewarm"
+        q.qualityOfService = .utility
+        q.maxConcurrentOperationCount = 2
+        return q
+    }()
+
+    // Memory cache to prevent redundant fetches and enable smooth scrolling
     private static let cache: NSCache<NSString, UIImage> = {
         let c = NSCache<NSString, UIImage>()
-        c.countLimit = 200
-        c.totalCostLimit = 60 * 1024 * 1024 // 60 MB
+        c.countLimit = 250
+        c.totalCostLimit = 45 * 1024 * 1024 // 45 MB (shared with LocalFileArtworkCache's 20 MB budget)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            c.removeAllObjects()
+        }
         return c
     }()
-    
+
     static func setCachedImage(_ image: UIImage, for urlString: String) {
         let cost = Int(image.size.width * image.size.height * 4)
         cache.setObject(image, forKey: urlString as NSString, cost: cost)
     }
-    
+
     static func getCachedImage(for urlString: String) -> UIImage? {
         return cache.object(forKey: urlString as NSString)
     }
-    
-    private static var cacheDirectory: URL {
+
+    static func fastMemoryImage(for url: URL) -> UIImage? {
+        if let cached = cache.object(forKey: url.absoluteString as NSString) {
+            return cached
+        }
+        if url.scheme == "local-file-artwork", let host = url.host {
+            return LocalFileArtworkCache.shared.getFromMemory(for: host)
+        }
+        return nil
+    }
+
+    static let cacheDirectory: URL = {
         let paths = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
         let cachePath = paths[0].appendingPathComponent("AudioStreamImageCache")
         if !FileManager.default.fileExists(atPath: cachePath.path) {
             try? FileManager.default.createDirectory(at: cachePath, withIntermediateDirectories: true)
         }
+        AppCacheStorage.pruneDirectory(cachePath, maxBytes: maxDiskCacheBytes, targetBytes: targetDiskCacheBytes)
         return cachePath
-    }
-    
-    private static func stableFilename(for string: String) -> String {
+    }()
+
+    static func stableFilename(for string: String) -> String {
         // FNV-1a 64-bit over UTF-8 bytes: stable across launches (unlike String.hashValue).
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in string.utf8 {
@@ -43,69 +75,197 @@ class ImageLoader: ObservableObject {
         return String(format: "%016llx", hash)
     }
 
-    private static func diskCacheURL(for url: URL) -> URL {
+    static func diskCacheURL(for url: URL) -> URL {
         return cacheDirectory.appendingPathComponent(stableFilename(for: url.absoluteString))
     }
-    
+
+    static func removeDiskCache(for url: URL) {
+        let diskURL = diskCacheURL(for: url)
+        cache.removeObject(forKey: url.absoluteString as NSString)
+        diskWriteQueue.async {
+            try? FileManager.default.removeItem(at: diskURL)
+        }
+    }
+
+    static func recordDiskWrite() {
+        pruneLock.lock()
+        writeCountSincePrune += 1
+        let shouldPrune = writeCountSincePrune >= 25
+        if shouldPrune {
+            writeCountSincePrune = 0
+        }
+        pruneLock.unlock()
+
+        if shouldPrune {
+            AppCacheStorage.pruneDirectory(cacheDirectory, maxBytes: maxDiskCacheBytes, targetBytes: targetDiskCacheBytes)
+        }
+    }
+
+    static func predecode(_ image: UIImage) -> UIImage {
+        if #available(iOS 15.0, *) {
+            if let prepared = image.preparingForDisplay() {
+                return prepared
+            }
+        }
+        guard let cgImage = image.cgImage else { return image }
+        let width = cgImage.width
+        let height = cgImage.height
+        guard width > 0, height > 0 else { return image }
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return image
+        }
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let decoded = ctx.makeImage() else { return image }
+        return UIImage(cgImage: decoded, scale: image.scale, orientation: image.imageOrientation)
+    }
+
+    private static func downscaledCGImage(from data: Data, maxPixelSize: CGFloat = 350) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    private static func downscaledCGImage(fromURL url: URL, maxPixelSize: CGFloat = 350) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
     private static func downscaledThumbnail(from data: Data, maxPixelSize: CGFloat = 350) -> UIImage? {
-        let options: [CFString: Any] = [
-            kCGImageSourceShouldCache: false,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: true
-        ]
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        guard let cgImage = downscaledCGImage(from: data, maxPixelSize: maxPixelSize) else {
             return nil
         }
-        return UIImage(cgImage: cgImage)
+        return predecode(UIImage(cgImage: cgImage))
     }
-    
+
     private static func downscaledThumbnail(fromURL url: URL, maxPixelSize: CGFloat = 350) -> UIImage? {
-        let options: [CFString: Any] = [
-            kCGImageSourceShouldCache: false,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: true
-        ]
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        guard let cgImage = downscaledCGImage(fromURL: url, maxPixelSize: maxPixelSize) else {
             return nil
         }
-        return UIImage(cgImage: cgImage)
+        return predecode(UIImage(cgImage: cgImage))
     }
-    
+
+    private static func loadLocalFileThumbnail(from url: URL, key: String, maxPixelSize: CGFloat = 350) -> UIImage? {
+        let diskURL = diskCacheURL(for: url)
+        let fm = FileManager.default
+        let sourceModDate = (try? fm.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+
+        if let thumbModDate = (try? fm.attributesOfItem(atPath: diskURL.path)[.modificationDate]) as? Date,
+           sourceModDate == nil || thumbDateIsFresh(thumbDate: thumbModDate, sourceDate: sourceModDate!),
+           let cachedThumb = downscaledThumbnail(fromURL: diskURL, maxPixelSize: maxPixelSize) {
+            return cachedThumb
+        }
+
+        guard let cgImage = downscaledCGImage(fromURL: url, maxPixelSize: maxPixelSize) else {
+            return nil
+        }
+        let rawImage = UIImage(cgImage: cgImage)
+        let displayImage = predecode(rawImage)
+
+        // Persist a compact 350px thumbnail so subsequent launches / NSCache evictions avoid full-res cover decoding.
+        diskWriteQueue.async {
+            if let jpegData = rawImage.jpegData(compressionQuality: 0.8) {
+                try? jpegData.write(to: diskURL, options: .atomic)
+                recordDiskWrite()
+            }
+        }
+        return displayImage
+    }
+
+    private static func thumbDateIsFresh(thumbDate: Date, sourceDate: Date) -> Bool {
+        thumbDate >= sourceDate
+    }
+
+    static func prewarm(urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        prewarmQueue.cancelAllOperations()
+        for url in urls.prefix(30) {
+            let key = url.absoluteString
+            if cache.object(forKey: key as NSString) != nil { continue }
+            prewarmQueue.addOperation {
+                if cache.object(forKey: key as NSString) != nil { return }
+                if url.isFileURL {
+                    if let img = loadLocalFileThumbnail(from: url, key: key, maxPixelSize: 350) {
+                        setCachedImage(img, for: key)
+                    }
+                } else if url.scheme == "local-file-artwork", let host = url.host {
+                    if let img = LocalFileArtworkCache.shared.get(for: host, maxPixelSize: 350) {
+                        setCachedImage(img, for: key)
+                    }
+                }
+            }
+        }
+    }
+
+    func loadIfNeeded(url: URL) {
+        if currentURL == url && image != nil {
+            return
+        }
+        load(url: url)
+    }
+
+    func reset() {
+        cancellable?.cancel()
+        cancellable = nil
+        currentURL = nil
+        image = nil
+    }
+
     func load(url: URL) {
         currentURL = url
         let requestedURL = url
         let key = url.absoluteString
         let nsKey = key as NSString
-        
+
         // Fast path: synchronous memory cache hit
         if let cachedImage = Self.cache.object(forKey: nsKey) {
             cancellable?.cancel()
             cancellable = nil
-            self.image = cachedImage
+            if self.image !== cachedImage {
+                self.image = cachedImage
+            }
             return
         }
-        
+
         if url.scheme == "local-file-artwork" {
             cancellable?.cancel()
             cancellable = nil
-            
+
             guard let hostKey = url.host else {
                 self.image = nil
                 return
             }
-            
+
             // Instant path: check LocalFileArtworkCache memory cache
             if let cached = LocalFileArtworkCache.shared.getFromMemory(for: hostKey) {
                 Self.setCachedImage(cached, for: key)
-                self.image = cached
+                if self.image !== cached {
+                    self.image = cached
+                }
                 return
             }
-            
-            // Asynchronous background load with thumbnail downscaling
+
+            // Asynchronous background load with thumbnail downscaling + pre-decode
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self = self else { return }
                 if let img = LocalFileArtworkCache.shared.get(for: hostKey, maxPixelSize: 350) {
@@ -123,13 +283,13 @@ class ImageLoader: ObservableObject {
             }
             return
         }
-        
+
         if url.isFileURL {
             cancellable?.cancel()
             cancellable = nil
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self = self else { return }
-                if let img = Self.downscaledThumbnail(fromURL: url, maxPixelSize: 350) {
+                if let img = Self.loadLocalFileThumbnail(from: url, key: key, maxPixelSize: 350) {
                     Self.setCachedImage(img, for: key)
                     DispatchQueue.main.async {
                         guard self.currentURL == requestedURL else { return }
@@ -144,69 +304,84 @@ class ImageLoader: ObservableObject {
             }
             return
         }
-        
-        let diskURL = Self.diskCacheURL(for: url)
-        
-        // Check disk cache first for any cached image file
-        if FileManager.default.fileExists(atPath: diskURL.path) {
+
+        if url.scheme == "local-artwork" {
             cancellable?.cancel()
             cancellable = nil
+
+            guard let host = url.host, let persistentID = UInt64(host) else {
+                self.image = nil
+                return
+            }
+
+            let diskURL = Self.diskCacheURL(for: url)
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                if let data = try? Data(contentsOf: diskURL),
-                   let img = Self.downscaledThumbnail(from: data, maxPixelSize: 350) ?? UIImage(data: data) {
+                guard let self = self else { return }
+                if FileManager.default.fileExists(atPath: diskURL.path),
+                   let cached = Self.downscaledThumbnail(fromURL: diskURL, maxPixelSize: 350) {
+                    Self.setCachedImage(cached, for: key)
+                    DispatchQueue.main.async {
+                        guard self.currentURL == requestedURL else { return }
+                        self.image = cached
+                    }
+                    return
+                }
+
+                let predicate = MPMediaPropertyPredicate(value: persistentID, forProperty: MPMediaItemPropertyPersistentID)
+                let query = MPMediaQuery(filterPredicates: [predicate])
+                if let artworkImage = query.items?.first?.artwork?.image(at: CGSize(width: 350, height: 350)) {
+                    let predecoded = Self.predecode(artworkImage)
+                    Self.setCachedImage(predecoded, for: key)
+                    Self.diskWriteQueue.async {
+                        if let data = predecoded.jpegData(compressionQuality: 0.8) {
+                            try? data.write(to: diskURL, options: .atomic)
+                            Self.recordDiskWrite()
+                        }
+                    }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentURL == requestedURL else { return }
+                        self.image = predecoded
+                    }
+                } else {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentURL == requestedURL, self.image == nil else { return }
+                        self.image = nil
+                    }
+                }
+            }
+            return
+        }
+
+        let diskURL = Self.diskCacheURL(for: url)
+        cancellable?.cancel()
+        cancellable = nil
+
+        // Check disk cache off the main thread before kicking off a network download.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            if FileManager.default.fileExists(atPath: diskURL.path) {
+                if let img = Self.downscaledThumbnail(fromURL: diskURL, maxPixelSize: 350)
+                    ?? (try? Data(contentsOf: diskURL)).flatMap(UIImage.init(data:)).map(Self.predecode) {
                     Self.setCachedImage(img, for: key)
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self, self.currentURL == requestedURL else { return }
                         self.image = img
                     }
+                    return
                 } else {
-                    // Evict poisoned entry (e.g. a previously cached HTTP error
-                    // body) so a later retry can fetch from the network.
+                    // Evict poisoned entry (e.g. a previously cached HTTP error body)
                     try? FileManager.default.removeItem(at: diskURL)
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self = self, self.currentURL == requestedURL, self.image == nil else { return }
-                        self.image = nil
-                    }
                 }
             }
-            return
-        }
-        
-        if url.scheme == "local-artwork" {
-            cancellable?.cancel()
-            cancellable = nil
-            
-            guard let host = url.host, let persistentID = UInt64(host) else {
-                self.image = nil
-                return
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.currentURL == requestedURL else { return }
+                self.startRemoteDownload(url: url, requestedURL: requestedURL, key: key, diskURL: diskURL)
             }
-            
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let predicate = MPMediaPropertyPredicate(value: persistentID, forProperty: MPMediaItemPropertyPersistentID)
-                let query = MPMediaQuery(filterPredicates: [predicate])
-                if let artworkImage = query.items?.first?.artwork?.image(at: CGSize(width: 350, height: 350)) {
-                    let downscaledImage: UIImage
-                    if let data = artworkImage.jpegData(compressionQuality: 0.8) {
-                        try? data.write(to: diskURL)
-                        downscaledImage = Self.downscaledThumbnail(from: data, maxPixelSize: 350) ?? artworkImage
-                    } else {
-                        downscaledImage = artworkImage
-                    }
-                    Self.setCachedImage(downscaledImage, for: key)
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self = self, self.currentURL == requestedURL else { return }
-                        self.image = downscaledImage
-                    }
-                } else {
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self = self, self.currentURL == requestedURL, self.image == nil else { return }
-                        self.image = nil
-                    }
-                }
-            }
-            return
         }
-        
+    }
+
+    private func startRemoteDownload(url: URL, requestedURL: URL, key: String, diskURL: URL) {
         // Download if not found in disk cache. Only 2xx responses with
         // non-empty bodies are cached; HTTP errors (e.g. 404) map to nil
         // WITHOUT caching so a later retry can succeed.
@@ -223,16 +398,23 @@ class ImageLoader: ObservableObject {
                 }
                 return output.data
             }
-            .handleEvents(receiveOutput: { data in
-                if let downscaled = Self.downscaledThumbnail(from: data, maxPixelSize: 350),
-                   let jpegData = downscaled.jpegData(compressionQuality: 0.8) {
-                    try? jpegData.write(to: diskURL)
-                } else {
-                    try? data.write(to: diskURL)
-                }
-            })
             .map { data -> UIImage? in
-                Self.downscaledThumbnail(from: data, maxPixelSize: 350) ?? UIImage(data: data)
+                let rawImage: UIImage?
+                if let cgImage = Self.downscaledCGImage(from: data, maxPixelSize: 350) {
+                    rawImage = UIImage(cgImage: cgImage)
+                } else {
+                    rawImage = UIImage(data: data)
+                }
+                guard let unencoded = rawImage else { return nil }
+                Self.diskWriteQueue.async {
+                    if let jpegData = unencoded.jpegData(compressionQuality: 0.8) {
+                        try? jpegData.write(to: diskURL, options: .atomic)
+                    } else {
+                        try? data.write(to: diskURL, options: .atomic)
+                    }
+                    Self.recordDiskWrite()
+                }
+                return Self.predecode(unencoded)
             }
             .receive(on: DispatchQueue.main)
             .sink(receiveCompletion: { _ in
@@ -245,7 +427,7 @@ class ImageLoader: ObservableObject {
                 self.image = img
             })
     }
-    
+
     deinit {
         cancellable?.cancel()
     }
@@ -255,10 +437,11 @@ struct RemoteImage: View {
     let url: URL?
     var fallbackView: AnyView? = nil
     @StateObject private var loader = ImageLoader()
-    
+
     var body: some View {
+        let displayImage = loader.image ?? url.flatMap { ImageLoader.fastMemoryImage(for: $0) }
         Group {
-            if let image = loader.image {
+            if let image = displayImage {
                 Image(uiImage: image)
                     .resizable()
             } else if let fallback = fallbackView {
@@ -269,12 +452,14 @@ struct RemoteImage: View {
         }
         .onAppear {
             if let url = url {
-                loader.load(url: url)
+                loader.loadIfNeeded(url: url)
             }
         }
         .onChange(of: url) { newUrl in
             if let newUrl = newUrl {
                 loader.load(url: newUrl)
+            } else {
+                loader.reset()
             }
         }
     }

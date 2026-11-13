@@ -785,18 +785,7 @@ class MusicLibraryService: ObservableObject {
     }
     
     private func deletionLog(_ message: String) {
-        let logPath = "/tmp/audiostream_deletion_debug.log"
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .medium)
-        let logMessage = "[\(timestamp)] \(message)\n"
-        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
-            fileHandle.seekToEndOfFile()
-            if let data = logMessage.data(using: .utf8) {
-                fileHandle.write(data)
-            }
-            fileHandle.closeFile()
-        } else {
-            try? logMessage.write(toFile: logPath, atomically: true, encoding: .utf8)
-        }
+        AppCacheStorage.appendBoundedLog(message, to: "/tmp/audiostream_deletion_debug.log")
     }
     
     func deletePlaylist(_ playlist: Playlist) -> Bool {

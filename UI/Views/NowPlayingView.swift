@@ -24,7 +24,6 @@ struct NowPlayingView: View {
     @EnvironmentObject var connectionService: ServerConnectionService
     @Binding var expand: Bool
     @AppStorage("RC_ShowVolumeSlider") private var showVolumeSlider: Bool = true
-    @State private var isScrubbing: Bool = false
     @State private var scrollOffset: CGFloat = 0
     @State private var selectedTrackForDelete: Track? = nil
     @State private var showTrackDeleteConfirmation = false
@@ -174,57 +173,14 @@ struct NowPlayingView: View {
                                 }
                                 
                                 // Scrub Bar
-                                VStack(spacing: 0) {
-                                    GeometryReader { scrubGeo in
-                                        ZStack(alignment: .leading) {
-                                            Rectangle()
-                                                .fill(Color.black.opacity(0.001))
-                                                .frame(width: scrubGeo.size.width, height: 36)
-                                            
-                                            Rectangle()
-                                                .fill(Color.white.opacity(0.2))
-                                                .frame(width: scrubGeo.size.width, height: 4)
-                                                .cornerRadius(2)
-                                            
-                                            Rectangle()
-                                                .fill(Color.white)
-                                                .frame(width: scrubGeo.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)), height: 4)
-                                                .cornerRadius(2)
-                                            
-                                            Circle()
-                                                .fill(Color.white)
-                                                .frame(width: 8, height: 8)
-                                                .offset(x: scrubGeo.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)) - 4)
-                                        }
-                                        .contentShape(Rectangle())
-                                        .gesture(
-                                            DragGesture(minimumDistance: 0)
-                                                .onChanged { value in
-                                                    isScrubbing = true
-                                                    let percentage = min(max(0, Double(value.location.x / scrubGeo.size.width)), 1.0)
-                                                    let newTime = percentage * (audioService.state.currentTrack?.duration ?? 0)
-                                                    audioService.state.currentTime = newTime
-                                                }
-                                                .onEnded { value in
-                                                    let percentage = min(max(0, Double(value.location.x / scrubGeo.size.width)), 1.0)
-                                                    let newTime = percentage * (audioService.state.currentTrack?.duration ?? 0)
-                                                    audioService.seek(to: newTime)
-                                                    isScrubbing = false
-                                                }
-                                        )
-                                    }
-                                    .frame(height: 36)
-                                    
-                                    HStack {
-                                        Text(formatDuration(audioService.state.currentTime))
-                                            .font(.caption2)
-                                            .foregroundColor(.gray)
-                                        Spacer()
-                                        Text("-\(formatDuration(max(0, (audioService.state.currentTrack?.duration ?? 0) - audioService.state.currentTime)))")
-                                            .font(.caption2)
-                                            .foregroundColor(.gray)
-                                    }
-                                }
+                                NowPlayingScrubberView(
+                                    playbackProgress: audioService.progress,
+                                    trackDuration: audioService.state.currentTrack?.duration ?? 0,
+                                    barHeight: 36,
+                                    knobSize: 8,
+                                    cornerRadius: 2,
+                                    onSeek: { audioService.seek(to: $0) }
+                                )
                                 
                                 // Playback Controls
                                 HStack(alignment: .center) {
@@ -450,58 +406,14 @@ struct NowPlayingView: View {
                                     .padding(.horizontal, 26)
 
                                     // Scrub Bar
-                                    VStack(spacing: 0) {
-                                        GeometryReader { geometry in
-                                            ZStack(alignment: .leading) {
-                                                // Hit Zone
-                                                Rectangle()
-                                                    .fill(Color.black.opacity(0.001))
-                                                    .frame(width: geometry.size.width, height: 26)
-
-                                                // Visible Track background
-                                                Rectangle()
-                                                    .fill(Color.white.opacity(0.2))
-                                                    .frame(width: geometry.size.width, height: 4)
-
-                                                // Active progress
-                                                Rectangle()
-                                                    .fill(Color.white)
-                                                    .frame(width: geometry.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)), height: 4)
-
-                                                Circle()
-                                                    .fill(Color.white)
-                                                    .frame(width: 12, height: 12)
-                                                    .offset(x: geometry.size.width * CGFloat(audioService.state.currentTime / max(audioService.state.currentTrack?.duration ?? 1, 1)) - 6)
-                                            }
-                                            .contentShape(Rectangle())
-                                            .gesture(
-                                                DragGesture(minimumDistance: 0)
-                                                    .onChanged { value in
-                                                        isScrubbing = true
-                                                        let percentage = min(max(0, Double(value.location.x / geometry.size.width)), 1.0)
-                                                        let newTime = percentage * (audioService.state.currentTrack?.duration ?? 0)
-                                                        audioService.state.currentTime = newTime
-                                                    }
-                                                    .onEnded { value in
-                                                        let percentage = min(max(0, Double(value.location.x / geometry.size.width)), 1.0)
-                                                        let newTime = percentage * (audioService.state.currentTrack?.duration ?? 0)
-                                                        audioService.seek(to: newTime)
-                                                        isScrubbing = false
-                                                    }
-                                            )
-                                        }
-                                        .frame(height: 26)
-
-                                        HStack {
-                                            Text(formatDuration(audioService.state.currentTime))
-                                                .font(.caption2)
-                                                .foregroundColor(.gray)
-                                            Spacer()
-                                            Text("-\(formatDuration(max(0, (audioService.state.currentTrack?.duration ?? 0) - audioService.state.currentTime)))")
-                                                .font(.caption2)
-                                                .foregroundColor(.gray)
-                                        }
-                                    }
+                                    NowPlayingScrubberView(
+                                        playbackProgress: audioService.progress,
+                                        trackDuration: audioService.state.currentTrack?.duration ?? 0,
+                                        barHeight: 26,
+                                        knobSize: 12,
+                                        cornerRadius: 0,
+                                        onSeek: { audioService.seek(to: $0) }
+                                    )
                                     .padding(.horizontal, 32)
 
                                     Spacer().frame(height: 26)
@@ -942,6 +854,75 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+private struct NowPlayingScrubberView: View {
+    @ObservedObject var playbackProgress: PlaybackProgress
+    let trackDuration: TimeInterval
+    let barHeight: CGFloat
+    let knobSize: CGFloat
+    let cornerRadius: CGFloat
+    let onSeek: (TimeInterval) -> Void
+
+    private var ratio: CGFloat {
+        let safeDuration = max(trackDuration, 1)
+        return CGFloat(min(max(playbackProgress.currentTime / safeDuration, 0), 1))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.black.opacity(0.001))
+                        .frame(width: geometry.size.width, height: barHeight)
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: geometry.size.width, height: 4)
+                        .cornerRadius(cornerRadius)
+
+                    Rectangle()
+                        .fill(Color.white)
+                        .frame(width: geometry.size.width * ratio, height: 4)
+                        .cornerRadius(cornerRadius)
+
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: knobSize, height: knobSize)
+                        .offset(x: geometry.size.width * ratio - knobSize / 2)
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let percentage = min(max(0, Double(value.location.x / max(geometry.size.width, 1))), 1.0)
+                            playbackProgress.currentTime = percentage * trackDuration
+                        }
+                        .onEnded { value in
+                            let percentage = min(max(0, Double(value.location.x / max(geometry.size.width, 1))), 1.0)
+                            onSeek(percentage * trackDuration)
+                        }
+                )
+            }
+            .frame(height: barHeight)
+
+            HStack {
+                Text(formatDuration(playbackProgress.currentTime))
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+                Spacer()
+                Text("-\(formatDuration(max(0, trackDuration - playbackProgress.currentTime)))")
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
+        }
+    }
+
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let total = Int(max(0, duration))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 

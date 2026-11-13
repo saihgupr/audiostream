@@ -14,13 +14,10 @@ struct MusicPlayerScreen: View {
 
     @StateObject private var tint = ArtworkTintProvider()
     @State private var dragOffset: CGFloat = 0
-    @State private var isScrubbing = false
 
     private typealias M = MusicPlayerMetrics
 
     private var track: Track? { audioService.state.currentTrack }
-    private var duration: Double { max(track?.duration ?? 1, 1) }
-    private var progress: CGFloat { CGFloat(min(max(audioService.state.currentTime / duration, 0), 1)) }
 
     var body: some View {
         GeometryReader { geo in
@@ -120,16 +117,15 @@ struct MusicPlayerScreen: View {
     }
 
     private func portraitScrubber(width w: CGFloat, bottom: CGFloat) -> some View {
-        let trackWidth = w - M.sideMargin * 2
-        let thickness = isScrubbing ? M.scrubberTrackActive : M.scrubberTrack
-
-        return ZStack(alignment: .topLeading) {
-            scrubberTrack(width: trackWidth, thickness: thickness)
-                .position(x: w / 2, y: bottom - M.scrubberCenterFromBottom)
-
-            timeLabels(width: trackWidth)
-                .position(x: w / 2, y: bottom - M.timeCenterFromBottom)
-        }
+        MusicScrubberContainer(
+            progress: audioService.progress,
+            trackDuration: track?.duration ?? 0,
+            trackWidth: w - M.sideMargin * 2,
+            isPortrait: true,
+            screenWidth: w,
+            bottom: bottom,
+            onSeek: { audioService.seek(to: $0) }
+        )
     }
 
     private func portraitTransport(width w: CGFloat, bottom: CGFloat) -> some View {
@@ -272,7 +268,6 @@ struct MusicPlayerScreen: View {
         let artistText = track?.artist ?? "Select Music"
         let artistParts = artistText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
         let textWidth = max(100, w - M.moreButtonDiameter - 16)
-        let thickness = isScrubbing ? M.scrubberTrackActive : M.scrubberTrack
 
         return VStack(spacing: 0) {
             Spacer(minLength: 2)
@@ -315,10 +310,15 @@ struct MusicPlayerScreen: View {
             Spacer(minLength: 8)
 
             // 2. Scrubber
-            VStack(spacing: 4) {
-                scrubberTrack(width: w, thickness: thickness)
-                timeLabels(width: w)
-            }
+            MusicScrubberContainer(
+                progress: audioService.progress,
+                trackDuration: track?.duration ?? 0,
+                trackWidth: w,
+                isPortrait: false,
+                screenWidth: w,
+                bottom: 0,
+                onSeek: { audioService.seek(to: $0) }
+            )
             .frame(width: w)
 
             Spacer(minLength: 8)
@@ -483,53 +483,6 @@ struct MusicPlayerScreen: View {
         .accessibilityLabel("More")
     }
 
-    private func scrubberTrack(width trackWidth: CGFloat, thickness: CGFloat) -> some View {
-        ZStack(alignment: .leading) {
-            Color.clear.frame(width: trackWidth, height: 32)
-
-            Capsule()
-                .musicAdditive(MusicPlayerAlpha.remaining)
-                .frame(width: trackWidth, height: thickness)
-
-            Capsule()
-                .musicAdditive(MusicPlayerAlpha.secondary)
-                .frame(width: max(thickness, trackWidth * progress), height: thickness)
-
-            if !isScrubbing {
-                Circle()
-                    .musicAdditive(MusicPlayerAlpha.secondary)
-                    .frame(width: M.scrubberKnob, height: M.scrubberKnob)
-                    .offset(x: trackWidth * progress - M.scrubberKnob / 2)
-            }
-        }
-        .frame(width: trackWidth, height: 32)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    withAnimation(.easeOut(duration: 0.12)) { isScrubbing = true }
-                    let pct = min(max(0, Double(value.location.x / trackWidth)), 1)
-                    audioService.state.currentTime = pct * (track?.duration ?? 0)
-                }
-                .onEnded { value in
-                    let pct = min(max(0, Double(value.location.x / trackWidth)), 1)
-                    audioService.seek(to: pct * (track?.duration ?? 0))
-                    withAnimation(.easeOut(duration: 0.12)) { isScrubbing = false }
-                }
-        )
-    }
-
-    private func timeLabels(width: CGFloat) -> some View {
-        HStack {
-            Text(formatTime(audioService.state.currentTime))
-            Spacer()
-            Text("-" + formatTime(max(0, (track?.duration ?? 0) - audioService.state.currentTime)))
-        }
-        .font(.system(size: M.timeFontSize, weight: .medium).monospacedDigit())
-        .musicAdditive(MusicPlayerAlpha.time)
-        .frame(width: width)
-    }
-
     private func volumeSlider(trackWidth: CGFloat, level: CGFloat) -> some View {
         ZStack(alignment: .leading) {
             Color.clear.frame(width: trackWidth + M.volumeKnob, height: 36)
@@ -601,6 +554,86 @@ struct MusicPlayerScreen: View {
         case .all: return "repeat"
         case .one: return "repeat.1"
         }
+    }
+}
+
+private struct MusicScrubberContainer: View {
+    @ObservedObject var progress: PlaybackProgress
+    let trackDuration: TimeInterval
+    let trackWidth: CGFloat
+    let isPortrait: Bool
+    let screenWidth: CGFloat
+    let bottom: CGFloat
+    let onSeek: (TimeInterval) -> Void
+
+    @State private var isScrubbing = false
+    private typealias M = MusicPlayerMetrics
+
+    private var safeDuration: Double { max(trackDuration, 1) }
+    private var ratio: CGFloat { CGFloat(min(max(progress.currentTime / safeDuration, 0), 1)) }
+    private var thickness: CGFloat { isScrubbing ? M.scrubberTrackActive : M.scrubberTrack }
+
+    var body: some View {
+        if isPortrait {
+            ZStack(alignment: .topLeading) {
+                scrubberTrack
+                    .position(x: screenWidth / 2, y: bottom - M.scrubberCenterFromBottom)
+                timeLabels
+                    .position(x: screenWidth / 2, y: bottom - M.timeCenterFromBottom)
+            }
+        } else {
+            VStack(spacing: 4) {
+                scrubberTrack
+                timeLabels
+            }
+        }
+    }
+
+    private var scrubberTrack: some View {
+        ZStack(alignment: .leading) {
+            Color.clear.frame(width: trackWidth, height: 32)
+
+            Capsule()
+                .musicAdditive(MusicPlayerAlpha.remaining)
+                .frame(width: trackWidth, height: thickness)
+
+            Capsule()
+                .musicAdditive(MusicPlayerAlpha.secondary)
+                .frame(width: max(thickness, trackWidth * ratio), height: thickness)
+
+            if !isScrubbing {
+                Circle()
+                    .musicAdditive(MusicPlayerAlpha.secondary)
+                    .frame(width: M.scrubberKnob, height: M.scrubberKnob)
+                    .offset(x: trackWidth * ratio - M.scrubberKnob / 2)
+            }
+        }
+        .frame(width: trackWidth, height: 32)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    withAnimation(.easeOut(duration: 0.12)) { isScrubbing = true }
+                    let pct = min(max(0, Double(value.location.x / trackWidth)), 1)
+                    progress.currentTime = pct * trackDuration
+                }
+                .onEnded { value in
+                    let pct = min(max(0, Double(value.location.x / trackWidth)), 1)
+                    onSeek(pct * trackDuration)
+                    withAnimation(.easeOut(duration: 0.12)) { isScrubbing = false }
+                }
+        )
+    }
+
+    private var timeLabels: some View {
+        HStack {
+            Text(formatTime(progress.currentTime))
+            Spacer()
+            Text("-" + formatTime(max(0, trackDuration - progress.currentTime)))
+        }
+        .font(.system(size: M.timeFontSize, weight: .medium).monospacedDigit())
+        .musicAdditive(MusicPlayerAlpha.time)
+        .frame(width: trackWidth)
     }
 
     private func formatTime(_ t: TimeInterval) -> String {

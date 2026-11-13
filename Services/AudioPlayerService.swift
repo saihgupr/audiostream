@@ -13,6 +13,9 @@ func notify_register_dispatch(
 
 class AudioPlayerService: ObservableObject {
     @Published var state = PlaybackState()
+    /// Separate observable for fast-ticking playback position so 1-second updates
+    /// only re-render progress sliders/timestamps instead of the entire app hierarchy.
+    let progress = PlaybackProgress()
     
     @Published var queue: [Track] = []
     @Published var queueIndex: Int = 0
@@ -367,8 +370,7 @@ class AudioPlayerService: ObservableObject {
                 player = nil
                 state.currentTrack = nil
                 state.isPlaying = false
-                state.currentTime = 0
-                state.duration = 0
+                progress.currentTime = 0
                 updateNowPlayingInfo()
             } else {
                 // If there are tracks left, adjust queueIndex and load next
@@ -400,6 +402,7 @@ class AudioPlayerService: ObservableObject {
         }
         let track = queue[index]
         state.currentTrack = track
+        progress.currentTime = 0
         debugLog("loadTrack(at: \(index)) active track set: '\(track.title)' (persistentId: '\(track.persistentId)')")
         
         // Reset artwork tracking for the new track
@@ -461,8 +464,9 @@ class AudioPlayerService: ObservableObject {
     }
     
     func seek(to time: TimeInterval) {
+        progress.currentTime = time
         player?.seek(to: CMTime(seconds: time, preferredTimescale: 1))
-        updateNowPlayingInfo()
+        updateNowPlayingInfo(elapsedTimeOverride: time)
     }
     
     func pause() {
@@ -495,8 +499,9 @@ class AudioPlayerService: ObservableObject {
     func previous() {
         // If within first 3 seconds, go to previous track, otherwise restart
         if let currentTime = player?.currentTime().seconds, currentTime > 3.0 {
+            progress.currentTime = 0
             player?.seek(to: .zero)
-            updateNowPlayingInfo()
+            updateNowPlayingInfo(elapsedTimeOverride: 0)
         } else if queueIndex > 0 {
             queueIndex -= 1
             loadTrack(at: queueIndex)
@@ -1164,8 +1169,7 @@ class AudioPlayerService: ObservableObject {
         stopObservingTime()
         
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { [weak self] time in
-            self?.state.currentTime = time.seconds
-            self?.updateNowPlayingInfo()
+            self?.progress.currentTime = time.seconds
         }
     }
     
@@ -1177,21 +1181,7 @@ class AudioPlayerService: ObservableObject {
     }
     
     // MARK: - Now Playing Info
-    private static var imageCacheDirectory: URL {
-        let paths = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
-        let cachePath = paths[0].appendingPathComponent("AudioStreamImageCache")
-        if !FileManager.default.fileExists(atPath: cachePath.path) {
-            try? FileManager.default.createDirectory(at: cachePath, withIntermediateDirectories: true)
-        }
-        return cachePath
-    }
-    
-    private static func diskCacheURL(for url: URL) -> URL {
-        let filename = abs(url.absoluteString.hashValue).description
-        return imageCacheDirectory.appendingPathComponent(filename)
-    }
-
-    private func updateNowPlayingInfo(artwork: MPMediaItemArtwork? = nil) {
+    private func updateNowPlayingInfo(artwork: MPMediaItemArtwork? = nil, elapsedTimeOverride: TimeInterval? = nil) {
         guard let track = state.currentTrack else {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             currentArtwork = nil
@@ -1207,7 +1197,7 @@ class AudioPlayerService: ObservableObject {
         nowPlayingInfo[MPMediaItemPropertyArtist] = track.artist
         nowPlayingInfo[MPMediaItemPropertyAlbumTitle] = track.album
         nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = track.duration
-        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player?.currentTime().seconds
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsedTimeOverride ?? player?.currentTime().seconds
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = state.isPlaying ? 1.0 : 0.0
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackQueueIndex] = queueIndex
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackQueueCount] = queue.count
@@ -1296,29 +1286,45 @@ class AudioPlayerService: ObservableObject {
             return
         }
         
-        // Check disk cache first for web URLs (http/https)
+        // Check shared disk cache off the main thread before downloading
         if url.scheme == "http" || url.scheme == "https" {
-            let diskURL = Self.diskCacheURL(for: url)
-            if FileManager.default.fileExists(atPath: diskURL.path),
-               let data = try? Data(contentsOf: diskURL),
-               let image = UIImage(data: data) {
-                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                self.updateNowPlayingInfo(artwork: artwork)
-                return
+            let diskURL = ImageLoader.diskCacheURL(for: url)
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                if FileManager.default.fileExists(atPath: diskURL.path),
+                   let image = LocalFileArtworkCache.downscaledThumbnail(fromURL: diskURL, maxPixelSize: 600)
+                       ?? (try? Data(contentsOf: diskURL)).flatMap(UIImage.init(data:)) {
+                    DispatchQueue.main.async {
+                        guard let self = self, self.state.currentTrack?.id == trackId else { return }
+                        let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                        self.updateNowPlayingInfo(artwork: artwork)
+                    }
+                    return
+                }
+                DispatchQueue.main.async {
+                    guard let self = self, self.state.currentTrack?.id == trackId else { return }
+                    self.fetchRemoteNowPlayingArtwork(url: url, trackId: trackId, diskURL: diskURL)
+                }
             }
+            return
         }
-        
+
+        fetchRemoteNowPlayingArtwork(url: url, trackId: trackId, diskURL: ImageLoader.diskCacheURL(for: url))
+    }
+
+    private func fetchRemoteNowPlayingArtwork(url: URL, trackId: Int64, diskURL: URL) {
         artworkTask = URLSession.shared.dataTask(with: url) { [weak self] data, response, _ in
             guard let self = self,
                   let http = response as? HTTPURLResponse,
                   (200...299).contains(http.statusCode),
                   let data = data,
                   !data.isEmpty,
-                  let image = UIImage(data: data) else { return }
+                  let image = LocalFileArtworkCache.downscaledThumbnail(from: data, maxPixelSize: 600) ?? UIImage(data: data) else { return }
             
-            // Save to disk cache
-            let diskURL = Self.diskCacheURL(for: url)
-            try? data.write(to: diskURL)
+            // Save bounded JPEG copy to shared FNV-1a cache instead of raw full-resolution data
+            if let jpegData = image.jpegData(compressionQuality: 0.8) {
+                try? jpegData.write(to: diskURL, options: .atomic)
+                ImageLoader.recordDiskWrite()
+            }
             
             DispatchQueue.main.async {
                 guard self.state.currentTrack?.id == trackId else { return }
@@ -1330,18 +1336,7 @@ class AudioPlayerService: ObservableObject {
     }
     
     private func debugLog(_ message: String) {
-        let logPath = "/tmp/audiostream_debug.log"
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .medium)
-        let logMessage = "[\(timestamp)] \(message)\n"
-        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
-            fileHandle.seekToEndOfFile()
-            if let data = logMessage.data(using: .utf8) {
-                fileHandle.write(data)
-            }
-            fileHandle.closeFile()
-        } else {
-            try? logMessage.write(toFile: logPath, atomically: true, encoding: .utf8)
-        }
+        AppCacheStorage.appendBoundedLog(message, to: "/tmp/audiostream_debug.log")
     }
 }
 
