@@ -20,6 +20,11 @@ struct ContentView: View {
         // Make all ScrollViews truly transparent at UIKit level so ZStack backgrounds show through
         UIScrollView.appearance().backgroundColor = .clear
         UITableView.appearance().sectionHeaderTopPadding = 0
+        let navAppearance = UINavigationBarAppearance()
+        navAppearance.configureWithTransparentBackground()
+        navAppearance.shadowColor = .clear
+        UINavigationBar.appearance().standardAppearance = navAppearance
+        UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
     }
     
     private var isPad: Bool {
