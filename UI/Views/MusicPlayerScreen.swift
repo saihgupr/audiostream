@@ -9,6 +9,7 @@ struct MusicPlayerScreen: View {
     @Binding var expand: Bool
     @Binding var showQueue: Bool
     @Binding var showMenu: Bool
+    @Binding var dragProgress: CGFloat
     let audioOutputName: String
     let showVolumeSlider: Bool
 
@@ -25,6 +26,7 @@ struct MusicPlayerScreen: View {
             let w = geo.size.width
             let h = geo.size.height
             let insets = geo.safeAreaInsets
+            let cornerRadius: CGFloat = dragOffset > 0 ? min(38, dragOffset * 0.5) : 0
 
             ZStack(alignment: .topLeading) {
                 MusicPlayerBackground(tint: tint.color)
@@ -37,6 +39,8 @@ struct MusicPlayerScreen: View {
                 }
             }
             .frame(width: w, height: h, alignment: .topLeading)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .shadow(color: Color.black.opacity(dragOffset > 0 ? 0.35 : 0), radius: 20, x: 0, y: -4)
             .contentShape(Rectangle())
             .gesture(dismissDrag)
         }
@@ -44,16 +48,17 @@ struct MusicPlayerScreen: View {
         .offset(y: dragOffset)
         .onAppear {
             dragOffset = 0
+            dragProgress = 0
             isDraggingDismiss = false
             tint.update(url: track?.artworkUrl)
         }
         .onDisappear {
-            dragOffset = 0
             isDraggingDismiss = false
         }
         .onChange(of: expand) { isExpanded in
             if isExpanded {
                 dragOffset = 0
+                dragProgress = 0
                 isDraggingDismiss = false
             }
         }
@@ -444,7 +449,9 @@ struct MusicPlayerScreen: View {
             guard dy > 10 && abs(dy) > abs(dx) * 1.15 else { return }
             isDraggingDismiss = true
         }
-        dragOffset = max(0, dy)
+        let offset = max(0, dy)
+        dragOffset = offset
+        dragProgress = min(max(offset / 320, 0), 1)
     }
 
     private func finishDismissDrag(_ value: DragGesture.Value) {
@@ -456,6 +463,7 @@ struct MusicPlayerScreen: View {
         } else {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                 dragOffset = 0
+                dragProgress = 0
             }
         }
     }

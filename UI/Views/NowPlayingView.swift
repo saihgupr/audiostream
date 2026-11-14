@@ -15,6 +15,7 @@ struct NowPlayingView: View {
     @EnvironmentObject var navManager: NavigationManager
     @EnvironmentObject var connectionService: ServerConnectionService
     @Binding var expand: Bool
+    var dragProgress: Binding<CGFloat> = .constant(0)
     @AppStorage("RC_ShowVolumeSlider") private var showVolumeSlider: Bool = true
     @State private var selectedTrackForDelete: Track? = nil
     @State private var showTrackDeleteConfirmation = false
@@ -35,6 +36,7 @@ struct NowPlayingView: View {
                     expand: $expand,
                     showQueue: $showQueue,
                     showMenu: $showMenu,
+                    dragProgress: dragProgress,
                     audioOutputName: audioOutputName,
                     showVolumeSlider: showVolumeSlider
                 )
@@ -594,7 +596,7 @@ struct NowPlayingView: View {
 
             }
         }
-        .background(Color.black.edgesIgnoringSafeArea(.all))
+        .background((usesMusicPlayerLayout ? Color.clear : Color.black).edgesIgnoringSafeArea(.all))
         .overlayPreferenceValue(MenuAnchorKey.self) { anchor in
             GeometryReader { geo in
                 if showMenu, let anchor = anchor {
