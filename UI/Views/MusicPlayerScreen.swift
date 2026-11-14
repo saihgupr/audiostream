@@ -210,18 +210,22 @@ struct MusicPlayerScreen: View {
 
     private func portraitUtilityRow(width w: CGFloat, bottom: CGFloat) -> some View {
         let y = bottom - M.utilityCenterFromBottom
-        let queueX = w - M.sideMargin - 24
 
         return ZStack(alignment: .topLeading) {
+            Image(systemName: "quote.bubble.fill")
+                .font(.system(size: 19))
+                .musicAdditive(MusicPlayerAlpha.disabled)
+                .position(x: w / 2 - M.utilitySideOffset, y: y)
+
             airPlayButton
                 .position(x: w / 2, y: y)
 
             queueButton
-                .position(x: queueX, y: y)
+                .position(x: w / 2 + M.utilitySideOffset, y: y)
 
             if let badge = queueBadgeSymbol {
                 queueBadge(symbol: badge)
-                    .position(x: queueX + 12, y: y - 12.3)
+                    .position(x: w / 2 + M.utilitySideOffset + 12, y: y - 12.3)
             }
 
             Text(audioOutputName)
@@ -401,40 +405,39 @@ struct MusicPlayerScreen: View {
                 Spacer(minLength: 8)
             }
 
-            // 5. Utility Row & Output device (AirPlay centered, Queue on right)
-            HStack {
-                Color.clear
-                    .frame(width: 44, height: 44)
-                    .padding(.leading, 8)
+            // 5. Utility Row & Output device
+            VStack(spacing: 3) {
+                HStack {
+                    Spacer()
+                    Image(systemName: "quote.bubble.fill")
+                        .font(.system(size: 19))
+                        .musicAdditive(MusicPlayerAlpha.disabled)
 
-                Spacer()
+                    Spacer()
 
-                airPlayButton
-                    .overlay(
-                        Text(audioOutputName)
-                            .font(.system(size: M.deviceNameFontSize, weight: .semibold))
-                            .musicAdditive(MusicPlayerAlpha.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .frame(width: max(120, w * 0.6), alignment: .center)
-                            .offset(y: 40)
-                            .allowsHitTesting(false),
-                        alignment: .top
-                    )
+                    airPlayButton
 
-                Spacer()
+                    Spacer()
 
-                ZStack(alignment: .topTrailing) {
-                    queueButton
-                    if let badge = queueBadgeSymbol {
-                        queueBadge(symbol: badge)
-                            .offset(x: 2, y: -2)
+                    ZStack(alignment: .topTrailing) {
+                        queueButton
+                        if let badge = queueBadgeSymbol {
+                            queueBadge(symbol: badge)
+                                .offset(x: 2, y: -2)
+                        }
                     }
+
+                    Spacer()
                 }
-                .padding(.trailing, 8)
+
+                Text(audioOutputName)
+                    .font(.system(size: M.deviceNameFontSize, weight: .semibold))
+                    .musicAdditive(MusicPlayerAlpha.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .allowsHitTesting(false)
             }
             .frame(width: w)
-            .padding(.bottom, 16)
 
             Spacer(minLength: 2)
         }

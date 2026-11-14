@@ -218,6 +218,7 @@ struct AlbumDetailView: View {
             .buttonStyle(PlainButtonStyle())
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden, edges: .top)
             
             // Track List Section
             Section {

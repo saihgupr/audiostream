@@ -23,8 +23,13 @@ struct ContentView: View {
         let navAppearance = UINavigationBarAppearance()
         navAppearance.configureWithTransparentBackground()
         navAppearance.shadowColor = .clear
+        navAppearance.shadowImage = UIImage()
         UINavigationBar.appearance().standardAppearance = navAppearance
         UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
+        UINavigationBar.appearance().compactAppearance = navAppearance
+        if #available(iOS 15.0, *) {
+            UINavigationBar.appearance().compactScrollEdgeAppearance = navAppearance
+        }
     }
     
     private var isPad: Bool {
