@@ -14,6 +14,7 @@ struct MusicPlayerScreen: View {
 
     @StateObject private var tint = ArtworkTintProvider()
     @State private var dragOffset: CGFloat = 0
+    @State private var isDraggingDismiss = false
 
     private typealias M = MusicPlayerMetrics
 
@@ -36,10 +37,26 @@ struct MusicPlayerScreen: View {
                 }
             }
             .frame(width: w, height: h, alignment: .topLeading)
+            .contentShape(Rectangle())
+            .gesture(dismissDrag)
         }
         .ignoresSafeArea()
         .offset(y: dragOffset)
-        .onAppear { tint.update(url: track?.artworkUrl) }
+        .onAppear {
+            dragOffset = 0
+            isDraggingDismiss = false
+            tint.update(url: track?.artworkUrl)
+        }
+        .onDisappear {
+            dragOffset = 0
+            isDraggingDismiss = false
+        }
+        .onChange(of: expand) { isExpanded in
+            if isExpanded {
+                dragOffset = 0
+                isDraggingDismiss = false
+            }
+        }
         .onChange(of: track?.artworkUrl) { tint.update(url: $0) }
     }
 
@@ -53,7 +70,7 @@ struct MusicPlayerScreen: View {
         let side = audioService.state.isPlaying ? playingSide : playingSide * M.artworkPausedScale
 
         return ZStack(alignment: .topLeading) {
-            // Grabber + artwork (drag to dismiss)
+            // Grabber + artwork
             ZStack {
                 Capsule()
                     .musicAdditive(MusicPlayerAlpha.grabber)
@@ -64,8 +81,6 @@ struct MusicPlayerScreen: View {
                     .position(x: w / 2, y: (artworkTop + artworkBottom) / 2)
             }
             .frame(width: w, height: artworkBottom)
-            .contentShape(Rectangle())
-            .gesture(dismissDrag)
 
             portraitTitleBlock(width: w, bottom: bottom)
             portraitScrubber(width: w, bottom: bottom)
@@ -190,26 +205,28 @@ struct MusicPlayerScreen: View {
 
     private func portraitUtilityRow(width w: CGFloat, bottom: CGFloat) -> some View {
         let y = bottom - M.utilityCenterFromBottom
-        let offset = M.utilitySideOffset * 0.55
+        let queueX = w - M.sideMargin - 24
 
         return ZStack(alignment: .topLeading) {
             airPlayButton
-                .position(x: w / 2 - offset, y: y)
+                .position(x: w / 2, y: y)
 
             queueButton
-                .position(x: w / 2 + offset, y: y)
+                .position(x: queueX, y: y)
 
             if let badge = queueBadgeSymbol {
                 queueBadge(symbol: badge)
-                    .position(x: w / 2 + offset + 12, y: y - 12.3)
+                    .position(x: queueX + 12, y: y - 12.3)
             }
 
             Text(audioOutputName)
                 .font(.system(size: M.deviceNameFontSize, weight: .semibold))
                 .musicAdditive(MusicPlayerAlpha.secondary)
                 .lineLimit(1)
-                .frame(width: w - 64)
+                .minimumScaleFactor(0.85)
+                .frame(width: w - 64, alignment: .center)
                 .position(x: w / 2, y: bottom - M.deviceNameCenterFromBottom)
+                .allowsHitTesting(false)
         }
     }
 
@@ -250,7 +267,6 @@ struct MusicPlayerScreen: View {
             }
             .frame(width: maxSide)
             .padding(.leading, leftMargin)
-            .gesture(dismissDrag)
 
             // Right column: responsive controls matching portrait exactly
             landscapeControls(width: controlsW)
@@ -380,32 +396,40 @@ struct MusicPlayerScreen: View {
                 Spacer(minLength: 8)
             }
 
-            // 5. Utility Row & Output device
-            VStack(spacing: 3) {
-                HStack {
-                    Spacer()
+            // 5. Utility Row & Output device (AirPlay centered, Queue on right)
+            HStack {
+                Color.clear
+                    .frame(width: 44, height: 44)
+                    .padding(.leading, 8)
 
-                    airPlayButton
+                Spacer()
 
-                    Spacer()
+                airPlayButton
+                    .overlay(
+                        Text(audioOutputName)
+                            .font(.system(size: M.deviceNameFontSize, weight: .semibold))
+                            .musicAdditive(MusicPlayerAlpha.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                            .frame(width: max(120, w * 0.6), alignment: .center)
+                            .offset(y: 40)
+                            .allowsHitTesting(false),
+                        alignment: .top
+                    )
 
-                    ZStack(alignment: .topTrailing) {
-                        queueButton
-                        if let badge = queueBadgeSymbol {
-                            queueBadge(symbol: badge)
-                                .offset(x: 2, y: -2)
-                        }
+                Spacer()
+
+                ZStack(alignment: .topTrailing) {
+                    queueButton
+                    if let badge = queueBadgeSymbol {
+                        queueBadge(symbol: badge)
+                            .offset(x: 2, y: -2)
                     }
-
-                    Spacer()
                 }
-
-                Text(audioOutputName)
-                    .font(.system(size: M.deviceNameFontSize, weight: .semibold))
-                    .musicAdditive(MusicPlayerAlpha.secondary)
-                    .lineLimit(1)
+                .padding(.trailing, 8)
             }
             .frame(width: w)
+            .padding(.bottom, 16)
 
             Spacer(minLength: 2)
         }
@@ -413,18 +437,35 @@ struct MusicPlayerScreen: View {
 
     // MARK: - Shared Subviews
 
-    private var dismissDrag: some Gesture {
-        DragGesture()
-            .onChanged { value in
-                dragOffset = max(0, value.translation.height)
+    private func handleDismissDragChanged(_ value: DragGesture.Value) {
+        let dx = value.translation.width
+        let dy = value.translation.height
+        if !isDraggingDismiss {
+            guard dy > 10 && abs(dy) > abs(dx) * 1.15 else { return }
+            isDraggingDismiss = true
+        }
+        dragOffset = max(0, dy)
+    }
+
+    private func finishDismissDrag(_ value: DragGesture.Value) {
+        isDraggingDismiss = false
+        if value.translation.height > 120 || value.predictedEndTranslation.height > 320 {
+            withAnimation(.easeOut(duration: 0.25)) {
+                expand = false
             }
+        } else {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                dragOffset = 0
+            }
+        }
+    }
+
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+            .onChanged { handleDismissDragChanged($0) }
             .onEnded { value in
-                if value.translation.height > 120 || value.predictedEndTranslation.height > 400 {
-                    withAnimation(.easeOut(duration: 0.25)) { expand = false }
-                    dragOffset = 0
-                } else {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { dragOffset = 0 }
-                }
+                guard isDraggingDismiss else { return }
+                finishDismissDrag(value)
             }
     }
 
@@ -442,14 +483,22 @@ struct MusicPlayerScreen: View {
         }
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: M.artworkRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: M.artworkRadius, style: .continuous))
         .shadow(color: Color.black.opacity(audioService.state.isPlaying ? 0.35 : 0.3), radius: 12, x: 0, y: 6)
         .animation(.spring(response: 0.45, dampingFraction: 0.72), value: audioService.state.isPlaying)
-        .onTapGesture {
-            if let track = track {
-                navManager.navigateToAlbum(title: track.album, artist: track.artist)
-                withAnimation { expand = false }
-            }
-        }
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { handleDismissDragChanged($0) }
+                .onEnded { value in
+                    let moved = hypot(value.translation.width, value.translation.height)
+                    if isDraggingDismiss {
+                        finishDismissDrag(value)
+                    } else if moved < 10, let track = track {
+                        navManager.navigateToAlbum(title: track.album, artist: track.artist)
+                        withAnimation { expand = false }
+                    }
+                }
+        )
     }
 
     private var moreButton: some View {

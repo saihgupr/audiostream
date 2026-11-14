@@ -278,11 +278,27 @@ struct NowPlayingView: View {
                                     }
                                 }
 
-                                // Bottom utility row (AirPlay, like Apple Music)
+                                // Bottom utility row (AirPlay centered, Queue on right)
                                 HStack {
+                                    Color.clear
+                                        .frame(width: 44, height: 44)
+
+                                    Spacer()
+
                                     AirPlayButton()
                                         .frame(width: 44, height: 44)
                                         .accessibilityLabel("AirPlay")
+                                        .overlay(
+                                            Text(audioOutputName)
+                                                .font(.caption2)
+                                                .foregroundColor(.gray)
+                                                .lineLimit(1)
+                                                .minimumScaleFactor(0.85)
+                                                .frame(width: 220, alignment: .center)
+                                                .offset(y: 40)
+                                                .allowsHitTesting(false),
+                                            alignment: .top
+                                        )
 
                                     Spacer()
 
@@ -295,12 +311,8 @@ struct NowPlayingView: View {
                                     }
                                     .accessibilityLabel("Queue")
                                 }
-
-                                Text(audioOutputName)
-                                    .font(.caption2)
-                                    .foregroundColor(.gray)
-                                    .lineLimit(1)
-                                    .padding(.top, 4)
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 16)
 
                                 Spacer()
                             }
@@ -542,7 +554,7 @@ struct NowPlayingView: View {
                                         }
                                         .accessibilityLabel("Queue")
                                     }
-                                    .padding(.horizontal, 78)
+                                    .padding(.horizontal, 44)
 
                                     Text(audioOutputName)
                                         .font(.system(size: 11, weight: .semibold))
