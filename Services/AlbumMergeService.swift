@@ -75,6 +75,7 @@ class AlbumMergeService: ObservableObject {
     func loadGroups() {
         guard let data = UserDefaults.standard.data(forKey: storageKey) else {
             self.mergeGroups = []
+            syncMergeGroupsToSharedPath()
             return
         }
         do {
@@ -83,6 +84,7 @@ class AlbumMergeService: ObservableObject {
             print("Error decoding merge groups: \(error)")
             self.mergeGroups = []
         }
+        syncMergeGroupsToSharedPath()
     }
     
     func saveGroups() {
@@ -93,6 +95,7 @@ class AlbumMergeService: ObservableObject {
             // Trigger objectWillChange manually since it's a singleton
             DispatchQueue.main.async {
                 self.objectWillChange.send()
+                NotificationCenter.default.post(name: .mergeGroupsDidChange, object: nil)
             }
         } catch {
             print("Error encoding merge groups: \(error)")

@@ -77,7 +77,9 @@ while true; do
     # Count incoming requests representing legitimate media streaming and library operations.
     # Exclude ping/status health checks so client presence probes don't prevent the iPhone from idling down.
     CURR=$(grep 'Request: ' "$LOG" 2>/dev/null | grep -v -E '(/(api/)?(ping|status))' | wc -l | tr -d ' ')
-    if [ "$CURR" -gt "$LAST_COUNT" ]; then
+    if [ "$CURR" -lt "$LAST_COUNT" ]; then
+        LAST_COUNT=$CURR
+    elif [ "$CURR" -gt "$LAST_COUNT" ]; then
         LAST_COUNT=$CURR
         LAST_ACTIVITY=$(date +%s)
     fi
@@ -106,6 +108,7 @@ EOF
             kill -9 "$MONITOR_PID" 2>/dev/null
             rm -f /tmp/autooff_monitor.pid
         fi
+        rm -f /tmp/autooff_monitor.sh
         killall -9 audiostreamerd 2>/dev/null
         for pid in $(ps aux 2>/dev/null | grep -i '[a]udiostreamerd' | grep -v ' Z ' | awk '{print $2}'); do
             kill -9 "$pid" 2>/dev/null

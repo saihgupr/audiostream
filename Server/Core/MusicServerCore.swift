@@ -4,15 +4,40 @@ import SQLite3
 import AVFoundation
 
 // MARK: - Logger
+private let serverLogLock = NSLock()
+private let serverLogMaxBytes: UInt64 = 512 * 1024
+
 public func serverLog(_ message: String) {
     let msg = "[\(Date())] \(message)\n"
     if let data = msg.data(using: .utf8) {
         let logURL = URL(fileURLWithPath: "/tmp/audiostreamer.log")
-        if FileManager.default.fileExists(atPath: logURL.path) {
+        serverLogLock.lock()
+        defer { serverLogLock.unlock() }
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: logURL.path) {
+            if let attrs = try? fm.attributesOfItem(atPath: logURL.path),
+               let size = attrs[.size] as? UInt64,
+               size >= serverLogMaxBytes,
+               let existing = try? Data(contentsOf: logURL) {
+                let keepBytes = Int(serverLogMaxBytes / 2)
+                if existing.count > keepBytes {
+                    var slice = existing.suffix(keepBytes)
+                    if let newlineIdx = slice.firstIndex(of: 0x0A), newlineIdx < slice.endIndex {
+                        let afterNewline = slice.index(after: newlineIdx)
+                        if afterNewline < slice.endIndex {
+                            slice = slice[afterNewline...]
+                        }
+                    }
+                    try? Data(slice).write(to: logURL, options: .atomic)
+                }
+            }
             if let fileHandle = try? FileHandle(forWritingTo: logURL) {
                 fileHandle.seekToEndOfFile()
                 fileHandle.write(data)
                 fileHandle.closeFile()
+            } else {
+                try? data.write(to: logURL)
             }
         } else {
             try? data.write(to: logURL)
@@ -451,7 +476,7 @@ public class SimpleHTTPServer {
         }
         // Touch the provider first: it refreshes merge-group revisions and
         // invalidates the serialized cache when they changed.
-        _ = songsProvider()
+        let currentSongs = songsProvider()
         
         songsJSONLock.lock()
         let cachedData = songsJSONCache
@@ -462,7 +487,7 @@ public class SimpleHTTPServer {
             return
         }
         
-        let songsWithDetails = songsProvider().map { song -> [String: Any] in
+        let songsWithDetails = currentSongs.map { song -> [String: Any] in
             var dict: [String: Any] = [
                 "id": song.id,
                 "persistentId": String(song.persistentId),
@@ -513,59 +538,126 @@ public class SimpleHTTPServer {
         }
     }
     
+    private func isAllowedAudioPath(_ candidatePath: String) -> Bool {
+        let resolvedCandidate = URL(fileURLWithPath: candidatePath).resolvingSymlinksInPath().standardizedFileURL.path
+        let allowedRoots = musicBasePaths + [
+            "/var/mobile/Media/iTunes_Control/Music",
+            "/var/mobile/Media/Purchases"
+        ]
+        for root in allowedRoots {
+            let resolvedRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().standardizedFileURL.path
+            let prefix = resolvedRoot.hasSuffix("/") ? resolvedRoot : resolvedRoot + "/"
+            if resolvedCandidate == resolvedRoot || resolvedCandidate.hasPrefix(prefix) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func validatedExistingFilePath(_ candidatePath: String) -> String? {
+        let resolved = URL(fileURLWithPath: candidatePath).resolvingSymlinksInPath().standardizedFileURL.path
+        guard isAllowedAudioPath(resolved) else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolved, isDirectory: &isDir), !isDir.boolValue else {
+            return nil
+        }
+        return resolved
+    }
+
     private func sendAudioFile(filename: String, clientSocket: Int32, rangeStart: Int64?, rangeEnd: Int64?) {
         var foundPath: String? = nil
-        let fileManager = FileManager.default
+        var blockedUnauthorized = false
         let decodedFilename = filename.removingPercentEncoding ?? filename
-        
+
+        func checkCandidate(_ candidate: String) -> String? {
+            if !isAllowedAudioPath(candidate) {
+                blockedUnauthorized = true
+                return nil
+            }
+            return validatedExistingFilePath(candidate)
+        }
+
         // 1. Direct absolute path or relative to musicBasePaths
-        if decodedFilename.hasPrefix("/") && fileManager.fileExists(atPath: decodedFilename) {
-            foundPath = decodedFilename
+        if decodedFilename.hasPrefix("/") {
+            foundPath = checkCandidate(decodedFilename)
         } else {
             for basePath in musicBasePaths {
-                let trialPath = "\(basePath)/\(decodedFilename)"
-                if fileManager.fileExists(atPath: trialPath) {
-                    foundPath = trialPath
+                let trialPath = (basePath as NSString).appendingPathComponent(decodedFilename)
+                if let resolved = checkCandidate(trialPath) {
+                    foundPath = resolved
+                    blockedUnauthorized = false
                     break
                 }
             }
         }
-        
+
         // 2. Try raw filename if decoded differed
         if foundPath == nil && filename != decodedFilename {
-            for basePath in musicBasePaths {
-                let trialPath = "\(basePath)/\(filename)"
-                if fileManager.fileExists(atPath: trialPath) {
-                    foundPath = trialPath
-                    break
-                }
-            }
-        }
-        
-        // 3. Fallback: Lookup in song providers by filename
-        if foundPath == nil {
-            let songs = songsProvider()
-            if let song = songs.first(where: { $0.filename == decodedFilename || $0.filename == filename }) {
+            if filename.hasPrefix("/") {
+                foundPath = checkCandidate(filename)
+            } else {
                 for basePath in musicBasePaths {
-                    let fullPath = "\(basePath)/\(song.filename)"
-                    if fileManager.fileExists(atPath: fullPath) {
-                        foundPath = fullPath
+                    let trialPath = (basePath as NSString).appendingPathComponent(filename)
+                    if let resolved = checkCandidate(trialPath) {
+                        foundPath = resolved
+                        blockedUnauthorized = false
                         break
                     }
                 }
             }
         }
-        
+
+        // 3. Fallback: Lookup in song providers by filename
+        if foundPath == nil && !blockedUnauthorized {
+            let songs = songsProvider()
+            if let song = songs.first(where: { $0.filename == decodedFilename || $0.filename == filename }) {
+                if song.filename.hasPrefix("/") {
+                    foundPath = validatedExistingFilePath(song.filename)
+                } else {
+                    for basePath in musicBasePaths {
+                        let fullPath = (basePath as NSString).appendingPathComponent(song.filename)
+                        if let resolved = validatedExistingFilePath(fullPath) {
+                            foundPath = resolved
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        if foundPath == nil && blockedUnauthorized {
+            serverLog("⚠️ Blocked unauthorized audio path request: \(filename)")
+            send403(clientSocket: clientSocket)
+            return
+        }
+
         guard let filePath = foundPath, let fileHandle = FileHandle(forReadingAtPath: filePath) else {
             serverLog("Audio file not found: \(filename)")
             send404(clientSocket: clientSocket)
             return
         }
         defer { fileHandle.closeFile() }
-        
-        let fileSize = fileHandle.seekToEndOfFile()
+
+        let fileSize = Int64(fileHandle.seekToEndOfFile())
+        if fileSize <= 0 {
+            if rangeStart != nil {
+                send416(fileSize: 0, clientSocket: clientSocket)
+            } else {
+                let headers = "HTTP/1.1 200 OK\r\nServer: AudioStreamer\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+                if let headerData = headers.data(using: .utf8) {
+                    sendData(headerData, clientSocket: clientSocket)
+                }
+            }
+            return
+        }
+
         let start = rangeStart ?? 0
-        let end = rangeEnd ?? Int64(fileSize - 1)
+        let requestedEnd = rangeEnd ?? (fileSize - 1)
+        let end = min(requestedEnd, fileSize - 1)
+        if start < 0 || start >= fileSize || start > end {
+            send416(fileSize: fileSize, clientSocket: clientSocket)
+            return
+        }
         let totalToRead = end - start + 1
         
         var headers = ""
@@ -632,32 +724,37 @@ public class SimpleHTTPServer {
     private static let folderArtworkNames = ["folder.jpg", "cover.jpg", "folder.png", "cover.png", "artwork.jpg", "artwork.png", "Cover.jpg", "Folder.jpg", "Cover.png", "Folder.png", "cover.jpeg", "folder.jpeg"]
 
     /// Resolves the on-disk audio file for a song id via the path map,
-    /// falling back to the song list + base paths. Returns nil if unknown.
+    /// falling back to the song list + base paths. Returns nil if unknown or outside allowed roots.
     private func resolveSongFilePath(persistentId: UInt64) -> String? {
         let pathMap = songFilePathsProvider()
-        let fileManager = FileManager.default
 
         if let path = pathMap[persistentId] {
-            if path.hasPrefix("/") && fileManager.fileExists(atPath: path) {
-                return path
-            }
-            for basePath in musicBasePaths {
-                let fullPath = "\(basePath)/\(path)"
-                if fileManager.fileExists(atPath: fullPath) {
-                    return fullPath
+            if path.hasPrefix("/") {
+                if let resolved = validatedExistingFilePath(path) {
+                    return resolved
+                }
+            } else {
+                for basePath in musicBasePaths {
+                    let fullPath = (basePath as NSString).appendingPathComponent(path)
+                    if let resolved = validatedExistingFilePath(fullPath) {
+                        return resolved
+                    }
                 }
             }
         }
 
         let songs = songsProvider()
         if let song = songs.first(where: { $0.persistentId == persistentId }) {
-            if song.filename.hasPrefix("/") && fileManager.fileExists(atPath: song.filename) {
-                return song.filename
-            }
-            for basePath in musicBasePaths {
-                let fullPath = "\(basePath)/\(song.filename)"
-                if fileManager.fileExists(atPath: fullPath) {
-                    return fullPath
+            if song.filename.hasPrefix("/") {
+                if let resolved = validatedExistingFilePath(song.filename) {
+                    return resolved
+                }
+            } else {
+                for basePath in musicBasePaths {
+                    let fullPath = (basePath as NSString).appendingPathComponent(song.filename)
+                    if let resolved = validatedExistingFilePath(fullPath) {
+                        return resolved
+                    }
                 }
             }
         }
@@ -773,8 +870,22 @@ public class SimpleHTTPServer {
         sendData(responseData, clientSocket: clientSocket)
     }
     
+    private func send403(clientSocket: Int32) {
+        let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        if let data = response.data(using: .utf8) {
+            sendData(data, clientSocket: clientSocket)
+        }
+    }
+
     private func send404(clientSocket: Int32) {
         let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        if let data = response.data(using: .utf8) {
+            sendData(data, clientSocket: clientSocket)
+        }
+    }
+
+    private func send416(fileSize: Int64, clientSocket: Int32) {
+        let response = "HTTP/1.1 416 Range Not Satisfiable\r\nServer: AudioStreamer\r\nContent-Range: bytes */\(fileSize)\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
         if let data = response.data(using: .utf8) {
             sendData(data, clientSocket: clientSocket)
         }

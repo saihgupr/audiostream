@@ -305,7 +305,9 @@ class ArtworkDownloadService {
             ImageLoader.setCachedImage(predecoded, for: "local-file-artwork://\(track.persistentId)")
         }
         
-        // 3. Clear LocalFileLibraryScanner memory cache so next read uses new artwork
+        // 3. Clear LocalFileLibraryScanner memory cache and persisted library snapshot so next read uses new artwork
         LocalFileLibraryScanner.shared.clearCache()
+        LocalLibraryDiskCache.shared.clear()
+        NotificationCenter.default.post(name: .libraryNeedsRefresh, object: nil)
     }
 }

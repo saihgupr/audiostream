@@ -29,12 +29,29 @@ struct ArtistMergeTarget: Identifiable {
     var id: String { artist }
 }
 
+enum AlbumSortOrder: String, CaseIterable, Identifiable {
+    case recentlyAdded = "Recently Added"
+    case title = "Title"
+    case artist = "Artist"
+
+    var id: String { rawValue }
+}
+
+enum SongSortOrder: String, CaseIterable, Identifiable {
+    case title = "Title"
+    case recentlyAdded = "Recently Added"
+    case artist = "Artist"
+
+    var id: String { rawValue }
+}
+
 struct LibraryView: View {
     @EnvironmentObject var connectionService: ServerConnectionService
     @EnvironmentObject var audioService: AudioPlayerService
     @EnvironmentObject var navManager: NavigationManager
-    @StateObject private var viewModel = LibraryViewModel()
+    @EnvironmentObject var viewModel: LibraryViewModel
     @State private var selectedCategory: LibraryCategory = .albums
+    @State private var playlistSearchQuery = ""
     @State private var artistSearchQuery = ""
     @State private var songSearchQuery = ""
     @State private var selectedAlbum: Album? = nil
@@ -49,7 +66,6 @@ struct LibraryView: View {
     @State private var selectedArtistForMerge: ArtistMergeTarget? = nil
     @State private var deleteTarget: LibraryDeleteTarget? = nil
     var stackId: UUID
-    @State private var hasLoadedInitialData = false
     
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
@@ -268,21 +284,38 @@ struct LibraryView: View {
                                     .cornerRadius(10)
                                 }
                                 
-                                HStack {
-                                    Image(systemName: "magnifyingglass").foregroundColor(.gray)
-                                    TextField("Search Songs", text: $songSearchQuery)
-                                        .textFieldStyle(PlainTextFieldStyle())
-                                        .foregroundColor(.white)
-                                    
-                                    if !songSearchQuery.isEmpty {
-                                        Button(action: { songSearchQuery = "" }) {
-                                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                HStack(spacing: 8) {
+                                    HStack {
+                                        Image(systemName: "magnifyingglass").foregroundColor(.gray)
+                                        TextField("Search Songs", text: $songSearchQuery)
+                                            .textFieldStyle(PlainTextFieldStyle())
+                                            .foregroundColor(.white)
+                                        
+                                        if !songSearchQuery.isEmpty {
+                                            Button(action: { songSearchQuery = "" }) {
+                                                Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                            }
                                         }
                                     }
+                                    .padding(10)
+                                    .background(Color.gray.opacity(0.2))
+                                    .cornerRadius(10)
+
+                                    Menu {
+                                        Picker("Sort Songs", selection: $viewModel.songSortOrder) {
+                                            ForEach(SongSortOrder.allCases) { order in
+                                                Text(order.rawValue).tag(order)
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: "arrow.up.arrow.down")
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundColor(.white)
+                                            .frame(width: 40, height: 40)
+                                            .background(Color.gray.opacity(0.2))
+                                            .cornerRadius(10)
+                                    }
                                 }
-                                .padding(10)
-                                .background(Color.gray.opacity(0.2))
-                                .cornerRadius(10)
                             }
                             .background(
                                 RefreshControlInstaller(onRefresh: {
@@ -372,8 +405,33 @@ struct LibraryView: View {
                         }
                         
                     } else if selectedCategory == .playlists {
+                        let filteredPlaylists = viewModel.playlists.filter {
+                            playlistSearchQuery.isEmpty ? true : $0.name.localizedCaseInsensitiveContains(playlistSearchQuery)
+                        }
                         List {
-                            ForEach(viewModel.playlists) { playlist in
+                            HStack {
+                                Image(systemName: "magnifyingglass").foregroundColor(.gray)
+                                TextField("Search Playlists", text: $playlistSearchQuery)
+                                    .textFieldStyle(PlainTextFieldStyle())
+                                    .foregroundColor(.white)
+                                if !playlistSearchQuery.isEmpty {
+                                    Button(action: { playlistSearchQuery = "" }) {
+                                        Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                    }
+                                }
+                            }
+                            .padding(10)
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(10)
+                            .background(
+                                RefreshControlInstaller(onRefresh: {
+                                    await viewModel.loadDataAsync(connectionService: connectionService, clearData: false, forceRefresh: true)
+                                })
+                            )
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
+                            ForEach(filteredPlaylists) { playlist in
                                 let playlistAlbum = Album(
                                     id: String(playlist.id),
                                     title: playlist.name,
@@ -395,19 +453,58 @@ struct LibraryView: View {
                                             fallbackBgColor: playlist.id < 0 ? Color.purple.opacity(0.2) : Color.gray.opacity(0.3),
                                             fallbackFgColor: playlist.id < 0 ? .purple : .white
                                         )
-                                        Text(playlist.name)
-                                            .foregroundColor(.white)
-                                            .font(.headline)
-                                            .lineLimit(1)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(playlist.name)
+                                                .foregroundColor(.white)
+                                                .font(.headline)
+                                                .lineLimit(1)
+                                            Text("\(playlist.tracks.count) song\(playlist.tracks.count == 1 ? "" : "s")")
+                                                .font(.caption)
+                                                .foregroundColor(.gray)
+                                        }
                                     }
                                     .padding(.vertical, 4)
+                                }
+                                .contextMenu {
+                                    Button(action: {
+                                        if !playlist.tracks.isEmpty {
+                                            audioService.play(tracks: playlist.tracks, startingAt: 0)
+                                        }
+                                    }) {
+                                        Label("Play", systemImage: "play.fill")
+                                    }
+
+                                    Button(action: {
+                                        if !playlist.tracks.isEmpty {
+                                            audioService.state.isShuffleEnabled = true
+                                            audioService.play(tracks: playlist.tracks.shuffled(), startingAt: 0)
+                                        }
+                                    }) {
+                                        Label("Shuffle", systemImage: "shuffle")
+                                    }
+
+                                    Button(action: {
+                                        if !playlist.tracks.isEmpty {
+                                            audioService.addToQueue(tracks: playlist.tracks)
+                                        }
+                                    }) {
+                                        Label("Add to Queue", systemImage: "text.badge.plus")
+                                    }
+
+                                    if connectionService.librarySource == .local && playlist.id >= 0 {
+                                        Button(action: {
+                                            deleteTarget = .playlist(playlist)
+                                        }) {
+                                            Label("Delete Playlist", systemImage: "trash")
+                                        }
+                                    }
                                 }
                                 .listRowBackground(Color.clear)
                                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             }
                             .onDelete(perform: connectionService.librarySource == .local ? { indexSet in
                                 if let index = indexSet.first {
-                                    let playlist = viewModel.playlists[index]
+                                    let playlist = filteredPlaylists[index]
                                     if playlist.id >= 0 {
                                         deleteTarget = .playlist(playlist)
                                     }
@@ -419,11 +516,6 @@ struct LibraryView: View {
                         }
                         .listStyle(PlainListStyle())
                         .background(Color.black)
-                        .background(
-                            RefreshControlInstaller(onRefresh: {
-                                await viewModel.loadDataAsync(connectionService: connectionService, clearData: false, forceRefresh: true)
-                            })
-                        )
                         .refreshableIfAvailable {
                             await viewModel.loadDataAsync(connectionService: connectionService, clearData: false, forceRefresh: true)
                         }
@@ -431,20 +523,37 @@ struct LibraryView: View {
                     } else if selectedCategory == .albums {
                         ScrollView {
                             VStack(spacing: 0) {
-                                HStack {
-                                    Image(systemName: "magnifyingglass").foregroundColor(.gray)
-                                    TextField("Search Albums", text: $viewModel.albumSearchQuery)
-                                    .textFieldStyle(PlainTextFieldStyle())
-                                    .foregroundColor(.white)
-                                    if !viewModel.albumSearchQuery.isEmpty {
-                                        Button(action: { viewModel.albumSearchQuery = "" }) {
-                                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                HStack(spacing: 8) {
+                                    HStack {
+                                        Image(systemName: "magnifyingglass").foregroundColor(.gray)
+                                        TextField("Search Albums", text: $viewModel.albumSearchQuery)
+                                        .textFieldStyle(PlainTextFieldStyle())
+                                        .foregroundColor(.white)
+                                        if !viewModel.albumSearchQuery.isEmpty {
+                                            Button(action: { viewModel.albumSearchQuery = "" }) {
+                                                Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                            }
                                         }
                                     }
+                                    .padding(10)
+                                    .background(Color.gray.opacity(0.2))
+                                    .cornerRadius(10)
+
+                                    Menu {
+                                        Picker("Sort Albums", selection: $viewModel.albumSortOrder) {
+                                            ForEach(AlbumSortOrder.allCases) { order in
+                                                Text(order.rawValue).tag(order)
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: "arrow.up.arrow.down")
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundColor(.white)
+                                            .frame(width: 40, height: 40)
+                                            .background(Color.gray.opacity(0.2))
+                                            .cornerRadius(10)
+                                    }
                                 }
-                                .padding(10)
-                                .background(Color.gray.opacity(0.2))
-                                .cornerRadius(10)
                                 .padding(.horizontal, 16)
                                 .padding(.top, 0)
                                 .padding(.bottom, 8)
@@ -705,8 +814,8 @@ struct LibraryView: View {
         .navigationViewStyle(StackNavigationViewStyle())
         .id(stackId)
         .onAppear {
-            guard !hasLoadedInitialData else { return }
-            hasLoadedInitialData = true
+            guard !viewModel.hasTriggeredInitialLoad else { return }
+            viewModel.hasTriggeredInitialLoad = true
             viewModel.loadData(connectionService: connectionService)
         }
         .onChange(of: connectionService.librarySource) { _ in
@@ -723,12 +832,9 @@ struct LibraryView: View {
                 viewModel.loadData(connectionService: connectionService, clearData: false, forceRefresh: false)
             }
         }
-
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
                 connectionService.handleAppActive()
-                // Library data remains loaded; no disruptive full reload on every foreground transition.
-                // A fresh load is triggered if connectivity state changes (onChange isConnected below).
             }
         }
         .onChange(of: navManager.resetLibraryToAlbums) { shouldReset in
@@ -737,19 +843,30 @@ struct LibraryView: View {
                 navManager.resetLibraryToAlbums = false
             }
         }
-        .onChange(of: navManager.currentTab) { newTab in
-            if newTab == "Library" {
-                selectedCategory = .albums
+        .onChange(of: navManager.requestedAlbumTarget) { target in
+            guard let target = target else { return }
+            let matchedAlbum: Album?
+            if let artist = target.artist, !artist.isEmpty {
+                let canonicalArtist = ArtistMergeService.shared.canonicalArtist(for: artist)
+                matchedAlbum = viewModel.albums.first {
+                    $0.title.caseInsensitiveCompare(target.title) == .orderedSame &&
+                    ($0.artist.localizedCaseInsensitiveContains(artist) ||
+                     $0.artist.localizedCaseInsensitiveContains(canonicalArtist) ||
+                     artist.localizedCaseInsensitiveContains($0.artist))
+                } ?? viewModel.albums.first {
+                    $0.title.caseInsensitiveCompare(target.title) == .orderedSame
+                }
+            } else {
+                matchedAlbum = viewModel.albums.first {
+                    $0.title.caseInsensitiveCompare(target.title) == .orderedSame
+                }
             }
-        }
-        .onChange(of: navManager.requestedAlbumTitle) { title in
-            guard let title = title else { return }
-            if let album = viewModel.albums.first(where: { $0.title == title }) {
+            if let album = matchedAlbum {
                 selectedCategory = .albums
                 selectedAlbum = album
                 navigateToAlbumActive = true
             }
-            navManager.requestedAlbumTitle = nil
+            navManager.requestedAlbumTarget = nil
         }
         .onChange(of: navManager.requestedArtistName) { name in
             guard let name = name else { return }
@@ -781,8 +898,10 @@ struct LibraryView: View {
                     message: Text("Are you sure you want to permanently delete '\(album.title)' and all its \(album.tracks.count) songs from this device? This action cannot be undone."),
                     primaryButton: .destructive(Text("Delete")) {
                         let libraryService = MusicLibraryService(connectionService: connectionService)
-                        if libraryService.deleteAlbum(album) {
-                            viewModel.removeAlbumState(album)
+                        Task { @MainActor in
+                            if await libraryService.deleteAlbumAsync(album) {
+                                viewModel.removeAlbumState(album)
+                            }
                         }
                     },
                     secondaryButton: .cancel()
@@ -793,8 +912,10 @@ struct LibraryView: View {
                     message: Text("Are you sure you want to permanently delete '\(track.title)' from this device? This action cannot be undone."),
                     primaryButton: .destructive(Text("Delete")) {
                         let libraryService = MusicLibraryService(connectionService: connectionService)
-                        if libraryService.deleteTrack(track) {
-                            viewModel.removeTrackState(track)
+                        Task { @MainActor in
+                            if await libraryService.deleteTrackAsync(track) {
+                                viewModel.removeTrackState(track)
+                            }
                         }
                     },
                     secondaryButton: .cancel()
@@ -805,8 +926,10 @@ struct LibraryView: View {
                     message: Text("Are you sure you want to permanently delete the playlist '\(playlist.name)'? This action cannot be undone."),
                     primaryButton: .destructive(Text("Delete")) {
                         let libraryService = MusicLibraryService(connectionService: connectionService)
-                        if libraryService.deletePlaylist(playlist) {
-                            viewModel.removePlaylistState(playlist)
+                        Task { @MainActor in
+                            if await libraryService.deletePlaylistAsync(playlist) {
+                                viewModel.removePlaylistState(playlist)
+                            }
                         }
                     },
                     secondaryButton: .cancel()
@@ -871,6 +994,18 @@ struct LibraryView: View {
     @Published var albumSearchQuery: String = "" {
         didSet { updateFilteredAlbums() }
     }
+    @Published var albumSortOrder: AlbumSortOrder = AlbumSortOrder(rawValue: UserDefaults.standard.string(forKey: "RC_AlbumSortOrder") ?? "") ?? .recentlyAdded {
+        didSet {
+            UserDefaults.standard.set(albumSortOrder.rawValue, forKey: "RC_AlbumSortOrder")
+            applyAlbumSortOrder()
+        }
+    }
+    @Published var songSortOrder: SongSortOrder = SongSortOrder(rawValue: UserDefaults.standard.string(forKey: "RC_SongSortOrder") ?? "") ?? .recentlyAdded {
+        didSet {
+            UserDefaults.standard.set(songSortOrder.rawValue, forKey: "RC_SongSortOrder")
+            applySongSortOrder()
+        }
+    }
     @Published private(set) var filteredAlbums: [Album] = []
     @Published var playlists: [Playlist] = []
     @Published var artists: [String] = []
@@ -882,8 +1017,10 @@ struct LibraryView: View {
     }
     @Published var isLoading: Bool = false
     @Published var message: String?
+    var hasTriggeredInitialLoad: Bool = false
     let loadingFinished = PassthroughSubject<Void, Never>()
     
+    private weak var activeConnectionService: ServerConnectionService?
     private var cancellables = Set<AnyCancellable>()
     private var isLoadInFlight: Bool = false
     private var pendingLoadTask: Task<Void, Never>? = nil
@@ -902,6 +1039,110 @@ struct LibraryView: View {
                 self?.tracksByArtistIndexBuilt = false
             }
             .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .mergeGroupsDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.tracksByArtistIndex = [:]
+                self.tracksByArtistIndexBuilt = false
+                if let conn = self.activeConnectionService {
+                    self.loadData(connectionService: conn, forceRefresh: true)
+                }
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .appStateDidRestore)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.tracksByArtistIndex = [:]
+                self.tracksByArtistIndexBuilt = false
+                self.hasTriggeredInitialLoad = false
+                if let conn = self.activeConnectionService {
+                    self.loadData(connectionService: conn, clearData: true, forceRefresh: true)
+                }
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .libraryNeedsRefresh)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self = self, let conn = self.activeConnectionService else { return }
+                self.loadData(connectionService: conn, clearData: false, forceRefresh: true)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func sortedAlbums(_ input: [Album], by order: AlbumSortOrder) -> [Album] {
+        switch order {
+        case .recentlyAdded:
+            return input.sorted { lhs, rhs in
+                let d1 = lhs.dateAdded ?? .distantPast
+                let d2 = rhs.dateAdded ?? .distantPast
+                if d1 != d2 { return d1 > d2 }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+        case .title:
+            return input.sorted { lhs, rhs in
+                let cmp = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+                if cmp != .orderedSame { return cmp == .orderedAscending }
+                return lhs.artist.localizedCaseInsensitiveCompare(rhs.artist) == .orderedAscending
+            }
+        case .artist:
+            return input.sorted { lhs, rhs in
+                let cmp = lhs.artist.localizedCaseInsensitiveCompare(rhs.artist)
+                if cmp != .orderedSame { return cmp == .orderedAscending }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+        }
+    }
+
+    private func sortedTracks(_ input: [Track], albums: [Album], by order: SongSortOrder) -> [Track] {
+        switch order {
+        case .title:
+            return input.sorted { lhs, rhs in
+                let cmp = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+                if cmp != .orderedSame { return cmp == .orderedAscending }
+                return lhs.artist.localizedCaseInsensitiveCompare(rhs.artist) == .orderedAscending
+            }
+        case .artist:
+            return input.sorted { lhs, rhs in
+                let cmp = lhs.artist.localizedCaseInsensitiveCompare(rhs.artist)
+                if cmp != .orderedSame { return cmp == .orderedAscending }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+        case .recentlyAdded:
+            var albumDates: [String: Date] = [:]
+            for album in albums {
+                if let date = album.dateAdded {
+                    albumDates["\(album.title.lowercased())|\(album.artist.lowercased())"] = date
+                }
+            }
+            return input.sorted { lhs, rhs in
+                let d1 = lhs.dateAdded
+                    ?? albumDates["\(lhs.album.lowercased())|\(lhs.artist.lowercased())"]
+                    ?? lhs.albumArtist.flatMap { albumDates["\(lhs.album.lowercased())|\($0.lowercased())"] }
+                    ?? Date(timeIntervalSince1970: 0)
+                let d2 = rhs.dateAdded
+                    ?? albumDates["\(rhs.album.lowercased())|\(rhs.artist.lowercased())"]
+                    ?? rhs.albumArtist.flatMap { albumDates["\(rhs.album.lowercased())|\($0.lowercased())"] }
+                    ?? Date(timeIntervalSince1970: 0)
+                if d1 != d2 { return d1 > d2 }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+        }
+    }
+
+    private func applyAlbumSortOrder() {
+        guard !albums.isEmpty else { return }
+        albumStreamingTask?.cancel()
+        albums = sortedAlbums(albums, by: albumSortOrder)
+    }
+
+    private func applySongSortOrder() {
+        guard !allTracks.isEmpty else { return }
+        allTracks = sortedTracks(allTracks, albums: albums, by: songSortOrder)
     }
 
     private func updateFilteredAlbums() {
@@ -973,29 +1214,37 @@ struct LibraryView: View {
         
         if source == .local {
             if let cached = LocalLibraryDiskCache.shared.load() {
-                applyCachedLibrary(albums: cached.albums, playlists: cached.playlists, tracks: cached.tracks)
+                applyCachedLibrary(albums: cached.albums, playlists: cached.playlists, tracks: cached.tracks, source: source)
             }
             return
         }
         
         // Instant synchronous fast path: load from disk cache if available
         if let cached = RemoteLibraryDiskCache.shared.load(serverURL: serverURL ?? "") {
-            applyCachedLibrary(albums: cached.albums, playlists: cached.playlists, tracks: cached.tracks)
+            applyCachedLibrary(albums: cached.albums, playlists: cached.playlists, tracks: cached.tracks, source: source)
         }
     }
     
-    private func applyCachedLibrary(albums: [Album], playlists: [Playlist], tracks: [Track]) {
-        self.albums = albums
-        self.playlists = playlists
-        self.allTracks = tracks
-        let allArt = albums.flatMap { $0.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+    private func applyCachedLibrary(albums: [Album], playlists: [Playlist], tracks: [Track], source: LibrarySource) {
+        let orderedAlbums = sortedAlbums(albums, by: albumSortOrder)
+        let orderedTracks = sortedTracks(tracks, albums: orderedAlbums, by: songSortOrder)
+        self.albums = orderedAlbums
+        self.allTracks = orderedTracks
+        let allArt = orderedAlbums.flatMap { $0.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
         self.artists = ArtistMergeService.shared.process(artists: allArt)
-        self.generateSpecialPlaylists()
+        self.playlists = LibraryPlaylistBuilder.combinePlaylists(
+            userPlaylists: playlists,
+            albums: orderedAlbums,
+            tracks: orderedTracks,
+            source: source
+        )
         PlaylistArtworkView.precomputeCollages(for: self.playlists)
-        ImageLoader.prewarm(urls: albums.prefix(30).compactMap { $0.artworkUrl })
+        ImageLoader.prewarm(urls: orderedAlbums.prefix(30).compactMap { $0.artworkUrl })
     }
     
     func loadData(connectionService: ServerConnectionService, clearData: Bool = false, forceRefresh: Bool = false) {
+        self.activeConnectionService = connectionService
+
         // Hydrate immediately if currently empty before any debounce fires
         if albums.isEmpty && !clearData && !forceRefresh {
             loadCacheSynchronously(serverURL: connectionService.serverURL)
@@ -1011,6 +1260,7 @@ struct LibraryView: View {
     }
     
     func loadDataAsync(connectionService: ServerConnectionService, clearData: Bool = false, forceRefresh: Bool = false) async {
+        self.activeConnectionService = connectionService
         let source = connectionService.librarySource
         message = nil
         
@@ -1066,26 +1316,34 @@ struct LibraryView: View {
                         uniqueTracks.append(track)
                     }
                 }
-                loadedTracks = uniqueTracks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+                loadedTracks = uniqueTracks
                 loadedAlbums = albums
                 // Persist the processed local library for an instant next launch
                 LocalLibraryDiskCache.shared.save(albums: albums, playlists: loadedPlaylists)
             }
+
+            let orderedAlbums = sortedAlbums(loadedAlbums, by: albumSortOrder)
+            let orderedTracks = sortedTracks(loadedTracks, albums: orderedAlbums, by: songSortOrder)
+            let combinedPlaylists = LibraryPlaylistBuilder.combinePlaylists(
+                userPlaylists: loadedPlaylists,
+                albums: orderedAlbums,
+                tracks: orderedTracks,
+                source: source
+            )
             
             // Suppress animation to avoid visible flash when background fetch replaces cached data
             withAnimation(.none) {
-                let allArtists = loadedAlbums.flatMap { album in
+                let allArtists = orderedAlbums.flatMap { album in
                     album.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 }
                 self.artists = ArtistMergeService.shared.process(artists: allArtists)
-                self.allTracks = loadedTracks
-                self.playlists = loadedPlaylists
-                self.generateSpecialPlaylists()
+                self.allTracks = orderedTracks
+                self.playlists = combinedPlaylists
             }
             PlaylistArtworkView.precomputeCollages(for: self.playlists)
             
             // Progressive top-to-bottom streaming so top albums are visible immediately
-            self.streamAlbumsProgressively(loadedAlbums)
+            self.streamAlbumsProgressively(orderedAlbums)
             
             if loadedTracks.isEmpty {
                 self.message = source == .local
@@ -1105,110 +1363,44 @@ struct LibraryView: View {
         }
         loadingFinished.send()
     }
-    
-    private func generateSpecialPlaylists() {
-        // 1. Create a map of album ID/title to dateAdded
-        var albumDates: [String: Date] = [:]
-        for album in albums {
-            if let date = album.dateAdded {
-                albumDates[album.id] = date
-                albumDates["\(album.title.lowercased())|\(album.artist.lowercased())"] = date
-            }
+
+    private func rebuildPlaylistsAndPersistCaches() {
+        let source = activeConnectionService?.librarySource
+            ?? LibrarySource(rawValue: UserDefaults.standard.string(forKey: "RC_LibrarySource") ?? "")
+            ?? .remote
+        let serverURL = activeConnectionService?.serverURL
+            ?? UserDefaults.standard.string(forKey: "RC_RemoteServerURL")
+            ?? ""
+
+        let tracksById = Dictionary(allTracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let updatedUserPlaylists: [Playlist] = playlists.filter { $0.id >= 0 }.map { playlist in
+            let remainingIds = playlist.songIds.filter { tracksById[$0] != nil }
+            return Playlist(
+                id: playlist.id,
+                name: playlist.name,
+                songIds: remainingIds,
+                tracks: remainingIds.compactMap { tracksById[$0] }
+            )
         }
-        
-        let now = Date()
-        var tracksWithDates: [(track: Track, date: Date)] = []
-        
-        for track in allTracks {
-            var trackDate: Date? = track.dateAdded
-            
-            if trackDate == nil {
-                let albumKey = "\(track.album.lowercased())|\(track.artist.lowercased())"
-                trackDate = albumDates[albumKey]
-            }
-            
-            let dateToUse = trackDate ?? Date(timeIntervalSince1970: 0)
-            tracksWithDates.append((track, dateToUse))
-        }
-        
-        // One sort for every "recent" playlist. Sorting once here avoids
-        // re-sorting five subsets on every library load.
-        let sortedTracksWithDates = tracksWithDates.sorted { lhs, rhs in
-            if lhs.date != rhs.date {
-                return lhs.date > rhs.date
-            }
-            return lhs.track.title.localizedCaseInsensitiveCompare(rhs.track.title) == .orderedAscending
-        }
-        
-        let twoWeeksAgo = now.addingTimeInterval(-14 * 24 * 3600)
-        let oneMonthAgo = now.addingTimeInterval(-30 * 24 * 3600)
-        let threeMonthsAgo = now.addingTimeInterval(-90 * 24 * 3600)
-        let sixMonthsAgo = now.addingTimeInterval(-180 * 24 * 3600)
-        let oneYearAgo = now.addingTimeInterval(-365 * 24 * 3600)
-        
-        let recentByDate = sortedTracksWithDates.prefix { $0.date >= twoWeeksAgo }.map { $0.track }
-        let recentlyAddedTracks: [Track]
-        if recentByDate.count < 20 {
-            recentlyAddedTracks = Array(sortedTracksWithDates.prefix(100).map { $0.track })
+
+        self.playlists = LibraryPlaylistBuilder.combinePlaylists(
+            userPlaylists: updatedUserPlaylists,
+            albums: albums,
+            tracks: allTracks,
+            source: source
+        )
+        PlaylistArtworkView.precomputeCollages(for: self.playlists)
+
+        if source == .remote {
+            RemoteLibraryDiskCache.shared.save(
+                albums: albums,
+                playlists: updatedUserPlaylists,
+                tracks: allTracks,
+                serverURL: serverURL
+            )
         } else {
-            recentlyAddedTracks = Array(recentByDate.prefix(100))
+            LocalLibraryDiskCache.shared.save(albums: albums, playlists: updatedUserPlaylists)
         }
-        
-        let monthTracks = sortedTracksWithDates.prefix { $0.date >= oneMonthAgo }.map { $0.track }
-        let threeMonthsTracks = sortedTracksWithDates.prefix { $0.date >= threeMonthsAgo }.map { $0.track }
-        let sixMonthsTracks = sortedTracksWithDates.prefix { $0.date >= sixMonthsAgo }.map { $0.track }
-        let yearTracks = sortedTracksWithDates.prefix { $0.date >= oneYearAgo }.map { $0.track }
-        
-        var specialPlaylists: [Playlist] = []
-        
-        if !recentlyAddedTracks.isEmpty {
-            specialPlaylists.append(Playlist(
-                id: -1,
-                name: "Recently Added",
-                songIds: recentlyAddedTracks.map { $0.id },
-                tracks: recentlyAddedTracks
-            ))
-        }
-        
-        if !monthTracks.isEmpty {
-            specialPlaylists.append(Playlist(
-                id: -2,
-                name: "Month",
-                songIds: monthTracks.map { $0.id },
-                tracks: monthTracks
-            ))
-        }
-        
-        if !threeMonthsTracks.isEmpty {
-            specialPlaylists.append(Playlist(
-                id: -3,
-                name: "3 Months",
-                songIds: threeMonthsTracks.map { $0.id },
-                tracks: threeMonthsTracks
-            ))
-        }
-        
-        if !sixMonthsTracks.isEmpty {
-            specialPlaylists.append(Playlist(
-                id: -4,
-                name: "6 Months",
-                songIds: sixMonthsTracks.map { $0.id },
-                tracks: sixMonthsTracks
-            ))
-        }
-        
-        if !yearTracks.isEmpty {
-            specialPlaylists.append(Playlist(
-                id: -5,
-                name: "Year",
-                songIds: yearTracks.map { $0.id },
-                tracks: yearTracks
-            ))
-        }
-        
-        self.playlists.removeAll { $0.id < 0 }
-        self.playlists.insert(contentsOf: specialPlaylists, at: 0)
-        self.allTracks = sortedTracksWithDates.map { $0.track }
     }
     
     private func buildArtistTrackIndexIfNeeded() {
@@ -1259,6 +1451,7 @@ struct LibraryView: View {
             album.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         }
         self.artists = ArtistMergeService.shared.process(artists: allArtists)
+        rebuildPlaylistsAndPersistCaches()
     }
     
     func removeTrackState(_ track: Track) {
@@ -1278,7 +1471,8 @@ struct LibraryView: View {
                         title: album.title,
                         artist: album.artist,
                         artworkUrl: album.artworkUrl,
-                        tracks: updatedTracks
+                        tracks: updatedTracks,
+                        dateAdded: album.dateAdded
                     )
                     self.albums[idx] = updatedAlbum
                 }
@@ -1290,6 +1484,7 @@ struct LibraryView: View {
             album.artist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         }
         self.artists = ArtistMergeService.shared.process(artists: allArtists)
+        rebuildPlaylistsAndPersistCaches()
     }
     
     func updateAlbumArtwork(album: Album) {
@@ -1307,10 +1502,12 @@ struct LibraryView: View {
                 self.allTracks[tIdx].artworkUrl = album.artworkUrl
             }
         }
+        rebuildPlaylistsAndPersistCaches()
     }
     
     func removePlaylistState(_ playlist: Playlist) {
         self.playlists.removeAll { $0.id == playlist.id }
+        rebuildPlaylistsAndPersistCaches()
     }
 }
 
@@ -1342,36 +1539,26 @@ class NavigationBarHiderVC: UIViewController {
 }
 
 extension View {
-    /// Attaches pull-to-refresh. Works correctly on SwiftUI `List` on iOS 15+.
+    /// Attaches pull-to-refresh on SwiftUI `List`.
     /// For SwiftUI `ScrollView`, use `.background(RefreshControlInstaller(...))` directly
     /// on a child view inside the scroll content instead.
     @ViewBuilder
     func refreshableIfAvailable(action: @escaping () async -> Void) -> some View {
-        if #available(iOS 15.0, *) {
-            self.refreshable {
-                await action()
-            }
-        } else {
-            // iOS 14: no .refreshable; callers using List should embed a
-            // RefreshControlInstaller as a listRowBackground or use the albums pattern.
-            self
+        self.refreshable {
+            await action()
         }
     }
     
     @ViewBuilder
     func keyboardDoneButton() -> some View {
-        if #available(iOS 15.0, *) {
-            self.toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") {
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    }
-                    .foregroundColor(.blue)
+        self.toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 }
+                .foregroundColor(.blue)
             }
-        } else {
-            self
         }
     }
 }

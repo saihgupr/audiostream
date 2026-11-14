@@ -308,6 +308,10 @@ struct MarqueeContainer<Content: View>: View {
                     offset = 0
                     restart(overflow: max(0, contentWidth - geo.size.width))
                 }
+                .onChange(of: geo.size.width) { newWidth in
+                    offset = 0
+                    restart(overflow: max(0, contentWidth - newWidth))
+                }
         }
         .clipped()
     }

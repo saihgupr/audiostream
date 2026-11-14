@@ -10,21 +10,12 @@ struct MenuAnchorKey: PreferenceKey {
     }
 }
 
-struct ScrollOffsetPreferenceKey: PreferenceKey {
-    typealias Value = CGFloat
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 struct NowPlayingView: View {
     @EnvironmentObject var audioService: AudioPlayerService
     @EnvironmentObject var navManager: NavigationManager
     @EnvironmentObject var connectionService: ServerConnectionService
     @Binding var expand: Bool
     @AppStorage("RC_ShowVolumeSlider") private var showVolumeSlider: Bool = true
-    @State private var scrollOffset: CGFloat = 0
     @State private var selectedTrackForDelete: Track? = nil
     @State private var showTrackDeleteConfirmation = false
     @State private var showMenu = false
@@ -89,11 +80,6 @@ struct NowPlayingView: View {
                         }
                         .frame(height: 50)
                         .contentShape(Rectangle())
-                        .ipadSwipeDownGesture {
-                            withAnimation {
-                                expand = false
-                            }
-                        }
                     }
                     
                     if geometry.size.width > geometry.size.height {
@@ -124,7 +110,7 @@ struct NowPlayingView: View {
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     if let track = audioService.state.currentTrack {
-                                        navManager.navigateToAlbum(title: track.album)
+                                        navManager.navigateToAlbum(title: track.album, artist: track.artist)
                                         withAnimation { expand = false }
                                     }
                                 }
@@ -324,13 +310,6 @@ struct NowPlayingView: View {
                     } else {
                         ScrollView(.vertical, showsIndicators: false) {
                             VStack(spacing: 0) {
-                                // Anchor to track scroll offset
-                                GeometryReader { geo in
-                                    Color.clear
-                                        .preference(key: ScrollOffsetPreferenceKey.self, value: geo.frame(in: .named("scroll")).minY)
-                                }
-                                .frame(height: 0)
-                                
                                 // Main content taking up full visible height
                                 VStack {
                                     Spacer().frame(height: 86)
@@ -360,7 +339,7 @@ struct NowPlayingView: View {
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         if let track = audioService.state.currentTrack {
-                                            navManager.navigateToAlbum(title: track.album)
+                                            navManager.navigateToAlbum(title: track.album, artist: track.artist)
                                             withAnimation { expand = false }
                                         }
                                     }
@@ -579,10 +558,11 @@ struct NowPlayingView: View {
                         }
                         .background(Color.clear)
                         .hideScrollBackground()
-                        .coordinateSpace(name: "scroll")
-                        .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
-                            scrollOffset = value
-                        }
+                    }
+                }
+                .ipadSwipeDownGesture {
+                    withAnimation {
+                        expand = false
                     }
                 }
             }
@@ -632,9 +612,11 @@ struct NowPlayingView: View {
                 primaryButton: .destructive(Text("Delete")) {
                     if let track = selectedTrackForDelete {
                         let libraryService = MusicLibraryService(connectionService: connectionService)
-                        if libraryService.deleteTrack(track) {
-                            audioService.removeTrackFromQueue(track: track)
-                            NotificationCenter.default.post(name: .trackDidDelete, object: track)
+                        Task { @MainActor in
+                            if await libraryService.deleteTrackAsync(track) {
+                                audioService.removeTrackFromQueue(track: track)
+                                NotificationCenter.default.post(name: .trackDidDelete, object: track)
+                            }
                         }
                     }
                     selectedTrackForDelete = nil
@@ -651,7 +633,7 @@ struct NowPlayingView: View {
                             if let currentTrack = audioService.state.currentTrack {
                                 Button(action: {
                                     withAnimation { showMenu = false }
-                                    navManager.navigateToAlbum(title: currentTrack.album)
+                                    navManager.navigateToAlbum(title: currentTrack.album, artist: currentTrack.artist)
                                     withAnimation { expand = false }
                                 }) {
                                     HStack {
@@ -846,7 +828,8 @@ extension View {
         if UIDevice.current.userInterfaceIdiom == .pad {
             self.gesture(
                 DragGesture().onEnded { value in
-                    if value.translation.height > 40 {
+                    if abs(value.translation.height) > abs(value.translation.width),
+                       value.translation.height > 45 {
                         onDismiss()
                     }
                 }

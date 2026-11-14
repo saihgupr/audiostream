@@ -2,17 +2,57 @@ import Foundation
 import Combine
 import UIKit
 
+struct ServerConnectionSnapshot {
+    let librarySource: LibrarySource
+    let serverURL: String
+    let autoConnect: Bool
+    let batterySaverMode: Bool
+
+    static func current(defaults: UserDefaults = .standard) -> ServerConnectionSnapshot {
+        let source = LibrarySource(rawValue: defaults.string(forKey: "RC_LibrarySource") ?? "") ?? .remote
+        let serverURL = defaults.string(forKey: "RC_ServerURL") ?? ""
+        let autoConnect = defaults.object(forKey: "RC_AutoConnect") as? Bool ?? true
+        let batterySaver = defaults.object(forKey: "RC_BatterySaverMode") as? Bool ?? true
+        return ServerConnectionSnapshot(
+            librarySource: source,
+            serverURL: serverURL,
+            autoConnect: autoConnect,
+            batterySaverMode: batterySaver
+        )
+    }
+}
+
 class ServerConnectionService: ObservableObject {
     @Published var serverURL: String = ""
     @Published var isConnected: Bool = false
     @Published var isSearching: Bool = false
     @Published var discoveredServers: [String] = []
+    @Published var savedServers: [String] = []
+    @Published var remoteStatus: RemoteServerStatus?
+    @Published var isFetchingStatus: Bool = false
     @Published var librarySource: LibrarySource = .remote {
         didSet {
             saveSettings()
+            guard !isUpdatingSettings else { return }
+            if librarySource == .local {
+                stopAutoConnect()
+                stopConnectionTimer()
+                isConnected = false
+                remoteStatus = nil
+                statusMessage = "Using Local Library"
+            } else {
+                updateConnectionTimerState()
+            }
         }
     }
     @Published var autoConnect: Bool = true {
+        didSet {
+            saveSettings()
+            guard !isUpdatingSettings else { return }
+            updateConnectionTimerState()
+        }
+    }
+    @Published var batterySaverMode: Bool = true {
         didSet {
             saveSettings()
         }
@@ -21,54 +61,106 @@ class ServerConnectionService: ObservableObject {
     @Published var statusMessage: String = "Disconnected"
     
     private var isUpdatingSettings = false
+    private let monitorsLifecycle: Bool
+    private var observers: [NSObjectProtocol] = []
     
     private let kServerURLKey = "RC_ServerURL"
     private let kLibrarySourceKey = "RC_LibrarySource"
     private let kAutoConnectKey = "RC_AutoConnect"
+    private let kBatterySaverModeKey = "RC_BatterySaverMode"
     private let kLastConnectedServerKey = "RC_LastConnectedServer"
+    private let kSavedServersKey = "RC_SavedServers"
     
     private var connectionTimer: Timer?
     private var probeTimer: Timer?
     private var probeAttempt = 0
     private let maxProbeAttempts = 18
     
-    init() {
+    init(startMonitoring: Bool = true) {
+        self.monitorsLifecycle = startMonitoring
         loadSettings()
-        startConnectionTimer()
-        setupLifecycleObservers()
+        if startMonitoring {
+            updateConnectionTimerState()
+            setupLifecycleObservers()
+        }
+    }
+
+    static func currentSnapshot() -> ServerConnectionSnapshot {
+        ServerConnectionSnapshot.current()
+    }
+
+    static func normalizeServerURL(_ raw: String) -> String? {
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lowered = trimmed.lowercased()
+        if !lowered.hasPrefix("http://") && !lowered.hasPrefix("https://") {
+            trimmed = "http://" + trimmed
+        }
+
+        while trimmed.hasSuffix("/") {
+            trimmed.removeLast()
+        }
+
+        guard let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              !host.isEmpty else {
+            return nil
+        }
+
+        return components.string
     }
     
     private var isBatterySaverEnabled: Bool {
-        if UserDefaults.standard.object(forKey: "RC_BatterySaverMode") == nil {
-            return true // Default enabled
-        }
-        return UserDefaults.standard.bool(forKey: "RC_BatterySaverMode")
+        batterySaverMode
     }
     
     private func setupLifecycleObservers() {
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+        let bgObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
             if self.isBatterySaverEnabled {
                 self.stopConnectionTimer()
                 self.stopAutoConnect()
             }
         }
+        observers.append(bgObserver)
         
-        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+        let fgObserver = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
-            if self.librarySource == .remote && !self.serverURL.isEmpty && !self.isAutoConnecting {
+            guard self.librarySource == .remote else {
+                self.stopConnectionTimer()
+                return
+            }
+            if !self.serverURL.isEmpty && !self.isAutoConnecting && (self.autoConnect || self.isConnected) {
                 self.checkConnection()
             }
-            self.startConnectionTimer()
+            self.updateConnectionTimerState()
+        }
+        observers.append(fgObserver)
+
+        let restoreObserver = NotificationCenter.default.addObserver(forName: .appStateDidRestore, object: nil, queue: .main) { [weak self] _ in
+            self?.reloadFromDefaultsAfterRestore()
+        }
+        observers.append(restoreObserver)
+    }
+
+    private func updateConnectionTimerState() {
+        guard monitorsLifecycle else { return }
+        if librarySource == .remote && (autoConnect || isConnected) {
+            startConnectionTimer()
+        } else {
+            stopConnectionTimer()
         }
     }
     
     private func startConnectionTimer() {
-        guard connectionTimer == nil else { return }
+        guard monitorsLifecycle, connectionTimer == nil else { return }
         // Periodic lightweight check (every 25s) to verify connection without spamming host
         connectionTimer = Timer.scheduledTimer(withTimeInterval: 25.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            if self.librarySource == .remote && !self.serverURL.isEmpty && !self.isAutoConnecting {
+            if self.librarySource == .remote && !self.serverURL.isEmpty && !self.isAutoConnecting && (self.autoConnect || self.isConnected) {
                 self.checkConnection()
             }
         }
@@ -82,26 +174,51 @@ class ServerConnectionService: ObservableObject {
     deinit {
         connectionTimer?.invalidate()
         probeTimer?.invalidate()
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
     
-    func connect(url: String) {
+    @discardableResult
+    func connect(url: String) -> Bool {
         stopAutoConnect()
         
-        guard let _ = URL(string: url) else {
+        guard let normalizedURL = Self.normalizeServerURL(url) else {
             print("Invalid URL: \(url)")
-            return
+            DispatchQueue.main.async {
+                self.statusMessage = "Invalid server URL"
+            }
+            return false
         }
         
-        self.serverURL = url
+        self.serverURL = normalizedURL
+        addSavedServer(normalizedURL)
         saveSettings()
         
         // Start deterministic connect flow targeting this URL
-        startAutoConnect(targetURL: url)
+        startAutoConnect(targetURL: normalizedURL)
+        return true
+    }
+
+    func addSavedServer(_ rawURL: String) {
+        guard let normalized = Self.normalizeServerURL(rawURL) else { return }
+        var updated = savedServers.filter { $0.caseInsensitiveCompare(normalized) != .orderedSame }
+        updated.insert(normalized, at: 0)
+        if updated.count > 8 {
+            updated = Array(updated.prefix(8))
+        }
+        savedServers = updated
+        saveSettings()
+    }
+
+    func removeSavedServer(_ url: String) {
+        savedServers.removeAll { $0.caseInsensitiveCompare(url) == .orderedSame }
+        saveSettings()
     }
     
     func setLibrarySource(_ source: LibrarySource) {
         librarySource = source
-        if source == .remote && !isConnected {
+        if source == .remote && !isConnected && autoConnect {
             startAutoConnect()
         }
     }
@@ -112,22 +229,26 @@ class ServerConnectionService: ObservableObject {
             self.isConnected = true
             self.statusMessage = "Connected"
             self.stopAutoConnect()
-            if let u = url, !u.isEmpty {
+            self.updateConnectionTimerState()
+            if let u = url, let normalized = Self.normalizeServerURL(u) {
                 if self.serverURL.isEmpty {
-                    self.serverURL = u
+                    self.serverURL = normalized
                     self.saveSettings()
                 }
-                UserDefaults.standard.set(u, forKey: self.kLastConnectedServerKey)
-                UserDefaults.standard.set(u, forKey: self.kServerURLKey)
+                self.addSavedServer(normalized)
+                UserDefaults.standard.set(normalized, forKey: self.kLastConnectedServerKey)
+                UserDefaults.standard.set(normalized, forKey: self.kServerURLKey)
             }
+            self.fetchRemoteStatus(targetURL: url)
         }
     }
     
     func checkConnection(targetURL: String? = nil, completion: ((Bool) -> Void)? = nil) {
         let rawURL = (targetURL != nil && !targetURL!.isEmpty) ? targetURL! : serverURL
-        guard let baseURL = URL(string: rawURL) else {
+        guard let normalized = Self.normalizeServerURL(rawURL), let baseURL = URL(string: normalized) else {
             DispatchQueue.main.async {
                 self.isConnected = false
+                self.remoteStatus = nil
                 self.statusMessage = "Disconnected"
                 completion?(false)
             }
@@ -156,12 +277,16 @@ class ServerConnectionService: ObservableObject {
                     }
                     
                     if isValid {
+                        let wasConnected = self.isConnected
                         self.isConnected = true
                         self.statusMessage = "Connected"
-                        if !rawURL.isEmpty {
-                            self.serverURL = rawURL
-                            UserDefaults.standard.set(rawURL, forKey: self.kLastConnectedServerKey)
-                            UserDefaults.standard.set(rawURL, forKey: self.kServerURLKey)
+                        self.serverURL = normalized
+                        self.addSavedServer(normalized)
+                        UserDefaults.standard.set(normalized, forKey: self.kLastConnectedServerKey)
+                        UserDefaults.standard.set(normalized, forKey: self.kServerURLKey)
+                        self.updateConnectionTimerState()
+                        if !wasConnected || self.remoteStatus == nil {
+                            self.fetchRemoteStatus(targetURL: normalized)
                         }
                         completion?(true)
                         return
@@ -173,6 +298,39 @@ class ServerConnectionService: ObservableObject {
                     self.statusMessage = "Disconnected"
                 }
                 completion?(false)
+            }
+        }.resume()
+    }
+
+    func fetchRemoteStatus(targetURL: String? = nil) {
+        guard librarySource == .remote else {
+            DispatchQueue.main.async { self.remoteStatus = nil }
+            return
+        }
+        let rawURL = (targetURL != nil && !targetURL!.isEmpty) ? targetURL! : serverURL
+        guard let normalized = Self.normalizeServerURL(rawURL),
+              let statusURL = URL(string: normalized)?.appendingPathComponent("/api/status") else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            self.isFetchingStatus = true
+        }
+
+        var request = URLRequest(url: statusURL)
+        request.timeoutInterval = 3.0
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isFetchingStatus = false
+                guard error == nil,
+                      let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200,
+                      let data = data,
+                      let decoded = try? JSONDecoder().decode(RemoteServerStatus.self, from: data) else {
+                    return
+                }
+                self.remoteStatus = decoded
             }
         }.resume()
     }
@@ -392,11 +550,12 @@ class ServerConnectionService: ObservableObject {
         guard localIP != "localhost" && localIP != "127.0.0.1" else {
             checkDiscovery(urlStr: "http://localhost:18080") { [weak self] success in
                 DispatchQueue.main.async {
-                    self?.isSearching = false
+                    guard let self = self else { return }
+                    self.isSearching = false
                     if success {
-                        self?.discoveredServers = ["http://localhost:18080"]
-                        if self?.isConnected == false {
-                            self?.connect(url: "http://localhost:18080")
+                        self.discoveredServers = ["http://localhost:18080"]
+                        if self.librarySource == .remote && !self.isConnected && self.autoConnect && self.serverURL.isEmpty {
+                            self.connect(url: "http://localhost:18080")
                         }
                     }
                 }
@@ -417,10 +576,10 @@ class ServerConnectionService: ObservableObject {
         func scanNextBatch() {
             if currentHostIndex > 254 {
                 self.isSearching = false
-                if !self.isConnected && !self.discoveredServers.isEmpty {
+                if self.librarySource == .remote && !self.isConnected && !self.discoveredServers.isEmpty {
                     if self.discoveredServers.contains(self.serverURL) {
                         self.markConnected(url: self.serverURL)
-                    } else if self.serverURL.isEmpty {
+                    } else if self.serverURL.isEmpty && self.autoConnect {
                         self.connect(url: self.discoveredServers[0])
                     }
                 }
@@ -442,10 +601,10 @@ class ServerConnectionService: ObservableObject {
                             if !self.discoveredServers.contains(urlStr) {
                                 self.discoveredServers.append(urlStr)
                             }
-                            if !self.isConnected {
+                            if self.librarySource == .remote && !self.isConnected {
                                 if self.serverURL == urlStr {
                                     self.markConnected(url: urlStr)
-                                } else if self.serverURL.isEmpty {
+                                } else if self.serverURL.isEmpty && self.autoConnect {
                                     self.connect(url: urlStr)
                                 }
                             }
@@ -523,6 +682,8 @@ class ServerConnectionService: ObservableObject {
         UserDefaults.standard.set(serverURL, forKey: kServerURLKey)
         UserDefaults.standard.set(librarySource.rawValue, forKey: kLibrarySourceKey)
         UserDefaults.standard.set(autoConnect, forKey: kAutoConnectKey)
+        UserDefaults.standard.set(batterySaverMode, forKey: kBatterySaverModeKey)
+        UserDefaults.standard.set(savedServers, forKey: kSavedServersKey)
     }
     
     private func loadSettings() {
@@ -534,37 +695,92 @@ class ServerConnectionService: ObservableObject {
         } else {
             self.autoConnect = true
         }
+
+        if UserDefaults.standard.object(forKey: kBatterySaverModeKey) != nil {
+            self.batterySaverMode = UserDefaults.standard.bool(forKey: kBatterySaverModeKey)
+        } else {
+            self.batterySaverMode = true
+        }
         
         if let savedSource = UserDefaults.standard.string(forKey: kLibrarySourceKey),
            let source = LibrarySource(rawValue: savedSource) {
             self.librarySource = source
+        } else {
+            self.librarySource = .remote
         }
-        
+
+        var loadedSaved = UserDefaults.standard.stringArray(forKey: kSavedServersKey) ?? []
         if let savedURL = UserDefaults.standard.string(forKey: kServerURLKey) {
-            self.serverURL = savedURL
+            let normalized = Self.normalizeServerURL(savedURL) ?? savedURL
+            self.serverURL = normalized
+            if !normalized.isEmpty && !loadedSaved.contains(where: { $0.caseInsensitiveCompare(normalized) == .orderedSame }) {
+                loadedSaved.insert(normalized, at: 0)
+            }
+        } else {
+            self.serverURL = ""
         }
+        if let lastURL = UserDefaults.standard.string(forKey: kLastConnectedServerKey),
+           let normalizedLast = Self.normalizeServerURL(lastURL),
+           !loadedSaved.contains(where: { $0.caseInsensitiveCompare(normalizedLast) == .orderedSame }) {
+            loadedSaved.append(normalizedLast)
+        }
+        self.savedServers = loadedSaved
         
-        triggerInitialConnection()
+        if monitorsLifecycle {
+            triggerInitialConnection()
+        }
+    }
+
+    func reloadFromDefaultsAfterRestore() {
+        stopAutoConnect()
+        loadSettings()
+        if librarySource == .local {
+            stopConnectionTimer()
+            isConnected = false
+            remoteStatus = nil
+            statusMessage = "Using Local Library"
+        } else {
+            isConnected = false
+            remoteStatus = nil
+            updateConnectionTimerState()
+            if autoConnect && !serverURL.isEmpty {
+                startAutoConnect()
+            }
+        }
     }
     
     private func triggerInitialConnection() {
+        guard monitorsLifecycle else { return }
         if librarySource == .remote {
-            startAutoConnect()
+            if autoConnect {
+                startAutoConnect()
+            } else {
+                statusMessage = serverURL.isEmpty ? "Not configured" : "Auto-connect off"
+            }
+        } else {
+            statusMessage = "Using Local Library"
         }
     }
     
     func handleAppActive() {
+        guard monitorsLifecycle else { return }
         if librarySource == .remote {
             if !isConnected && !isAutoConnecting {
-                startAutoConnect()
+                if autoConnect {
+                    startAutoConnect()
+                }
             } else if isConnected {
                 // Quiet background verification
                 checkConnection { [weak self] alive in
-                    if !alive {
-                        self?.startAutoConnect()
+                    guard let self = self else { return }
+                    if !alive && self.autoConnect {
+                        self.startAutoConnect()
                     }
                 }
             }
+            updateConnectionTimerState()
+        } else {
+            stopConnectionTimer()
         }
     }
 }

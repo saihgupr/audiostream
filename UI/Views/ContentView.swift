@@ -6,6 +6,7 @@ struct ContentView: View {
     
     // Navigation State
     @StateObject private var navManager = NavigationManager()
+    @StateObject private var libraryViewModel = LibraryViewModel()
     @StateObject private var quickActionManager = QuickActionManager.shared
     @State private var libraryStackId = UUID()
     @State private var searchStackId = UUID()
@@ -16,9 +17,7 @@ struct ContentView: View {
         UITabBar.appearance().isHidden = true
         // Make all ScrollViews truly transparent at UIKit level so ZStack backgrounds show through
         UIScrollView.appearance().backgroundColor = .clear
-        if #available(iOS 15.0, *) {
-            UITableView.appearance().sectionHeaderTopPadding = 0
-        }
+        UITableView.appearance().sectionHeaderTopPadding = 0
     }
     
     private var isPad: Bool {
@@ -81,7 +80,9 @@ struct ContentView: View {
                 .environmentObject(connectionService)
         }
         .environmentObject(navManager)
+        .environmentObject(libraryViewModel)
         .onAppear {
+            audioService.configure(connectionService: connectionService)
             handlePendingQuickAction()
         }
         .onReceive(quickActionManager.$pendingAction) { _ in

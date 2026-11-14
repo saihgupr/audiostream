@@ -87,6 +87,18 @@ class ImageLoader: ObservableObject {
         }
     }
 
+    static var diskSizeBytes: UInt64 {
+        AppCacheStorage.directorySizeBytes(at: cacheDirectory)
+    }
+
+    static func clearAllCaches() {
+        cache.removeAllObjects()
+        let dir = cacheDirectory
+        diskWriteQueue.async {
+            AppCacheStorage.clearDirectoryContents(at: dir)
+        }
+    }
+
     static func recordDiskWrite() {
         pruneLock.lock()
         writeCountSincePrune += 1
@@ -102,10 +114,8 @@ class ImageLoader: ObservableObject {
     }
 
     static func predecode(_ image: UIImage) -> UIImage {
-        if #available(iOS 15.0, *) {
-            if let prepared = image.preparingForDisplay() {
-                return prepared
-            }
+        if let prepared = image.preparingForDisplay() {
+            return prepared
         }
         guard let cgImage = image.cgImage else { return image }
         let width = cgImage.width
@@ -470,46 +480,128 @@ struct RemoteImage: View {
 class ArtistImageLoader: ObservableObject {
     @Published var imageURL: URL? = nil
     private var cancellable: AnyCancellable?
-    
-    private static var mappingFileURL: URL {
+
+    private struct CachePayload: Codable {
+        var urls: [String: String]
+        var misses: [String: Date]
+    }
+
+    private static let cacheLock = NSLock()
+    private static let diskQueue = DispatchQueue(label: "com.audiostream.artistimagecache.disk", qos: .utility)
+    private static let negativeCacheTTL: TimeInterval = 24 * 60 * 60
+
+    private static let legacyMappingFileURL: URL = {
         let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         return paths[0].appendingPathComponent("ArtistImageCache.json")
-    }
-    
-    private static func loadCache() -> [String: String] {
-        guard let data = try? Data(contentsOf: mappingFileURL),
-              let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
-            return [:]
-        }
-        return dict
-    }
-    
-    private static func saveCache(_ dict: [String: String]) {
-        DispatchQueue.global(qos: .utility).async {
-            if let data = try? JSONEncoder().encode(dict) {
-                try? data.write(to: mappingFileURL)
-            }
-        }
-    }
-    
-    private static var urlCache: [String: URL] = {
-        var cache: [String: URL] = [:]
-        let loaded = loadCache()
-        for (key, val) in loaded {
-            if let url = URL(string: val) {
-                cache[key] = url
-            }
-        }
-        return cache
     }()
-    
-    private static func updateCache(artist: String, url: URL) {
-        urlCache[artist.lowercased()] = url
-        var dict: [String: String] = [:]
-        for (key, val) in urlCache {
-            dict[key] = val.absoluteString
+
+    private static let mappingFileURL: URL = {
+        let paths = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+        return paths[0].appendingPathComponent("ArtistImageCache.json")
+    }()
+
+    static var diskSizeBytes: UInt64 {
+        AppCacheStorage.fileSizeBytes(at: mappingFileURL)
+    }
+
+    static func clearCache() {
+        cacheLock.lock()
+        state.urls.removeAll()
+        state.misses.removeAll()
+        cacheLock.unlock()
+        diskQueue.async {
+            AppCacheStorage.removeItemIfExists(at: mappingFileURL)
+            AppCacheStorage.removeItemIfExists(at: legacyMappingFileURL)
         }
-        saveCache(dict)
+    }
+
+    private static func loadInitialState() -> (urls: [String: URL], misses: [String: Date]) {
+        let fm = FileManager.default
+        let sourceURL: URL
+        if fm.fileExists(atPath: mappingFileURL.path) {
+            sourceURL = mappingFileURL
+            if fm.fileExists(atPath: legacyMappingFileURL.path) {
+                try? fm.removeItem(at: legacyMappingFileURL)
+            }
+        } else if fm.fileExists(atPath: legacyMappingFileURL.path) {
+            sourceURL = legacyMappingFileURL
+        } else {
+            return ([:], [:])
+        }
+
+        var loadedURLs: [String: URL] = [:]
+        var loadedMisses: [String: Date] = [:]
+        if let data = try? Data(contentsOf: sourceURL) {
+            if let payload = try? JSONDecoder().decode(CachePayload.self, from: data) {
+                for (key, val) in payload.urls {
+                    if let url = URL(string: val) {
+                        loadedURLs[key] = url
+                    }
+                }
+                let cutoff = Date().addingTimeInterval(-negativeCacheTTL)
+                loadedMisses = payload.misses.filter { $0.value > cutoff }
+            } else if let dict = try? JSONDecoder().decode([String: String].self, from: data) {
+                for (key, val) in dict {
+                    if let url = URL(string: val) {
+                        loadedURLs[key] = url
+                    }
+                }
+            }
+        }
+
+        if sourceURL == legacyMappingFileURL {
+            persistLockedPayload(urls: loadedURLs, misses: loadedMisses)
+            try? fm.removeItem(at: legacyMappingFileURL)
+        }
+        return (loadedURLs, loadedMisses)
+    }
+
+    private static var state: (urls: [String: URL], misses: [String: Date]) = loadInitialState()
+
+    private static func persistLockedPayload(urls: [String: URL], misses: [String: Date]) {
+        let serializedURLs = urls.mapValues { $0.absoluteString }
+        let payload = CachePayload(urls: serializedURLs, misses: misses)
+        diskQueue.async {
+            if let data = try? JSONEncoder().encode(payload) {
+                try? data.write(to: mappingFileURL, options: .atomic)
+            }
+        }
+    }
+
+    private static func cachedURL(for key: String) -> URL? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return state.urls[key]
+    }
+
+    private static func hasRecentMiss(for key: String) -> Bool {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let missDate = state.misses[key] else { return false }
+        if Date().timeIntervalSince(missDate) < negativeCacheTTL {
+            return true
+        }
+        state.misses.removeValue(forKey: key)
+        return false
+    }
+
+    private static func recordHit(artistKey: String, url: URL) {
+        cacheLock.lock()
+        state.urls[artistKey] = url
+        state.misses.removeValue(forKey: artistKey)
+        let snapshotURLs = state.urls
+        let snapshotMisses = state.misses
+        cacheLock.unlock()
+        persistLockedPayload(urls: snapshotURLs, misses: snapshotMisses)
+    }
+
+    private static func recordMiss(artistKey: String) {
+        cacheLock.lock()
+        state.misses[artistKey] = Date()
+        let snapshotURLs = state.urls
+        let snapshotMisses = state.misses
+        cacheLock.unlock()
+        persistLockedPayload(urls: snapshotURLs, misses: snapshotMisses)
     }
     
     func load(artistName: String) {
@@ -525,8 +617,11 @@ class ArtistImageLoader: ObservableObject {
             
         let cacheKey = (primaryArtist.isEmpty ? trimmed : primaryArtist).lowercased()
         
-        if let cached = Self.urlCache[cacheKey] {
+        if let cached = Self.cachedURL(for: cacheKey) {
             self.imageURL = cached
+            return
+        }
+        if Self.hasRecentMiss(for: cacheKey) {
             return
         }
         
@@ -537,22 +632,29 @@ class ArtistImageLoader: ObservableObject {
         }
         
         cancellable = URLSession.shared.dataTaskPublisher(for: url)
-            .map { $0.data }
-            .decode(type: DeezerArtistSearchResponse.self, decoder: JSONDecoder())
-            .map { response -> URL? in
+            .tryMap { output -> URL? in
+                let response = try JSONDecoder().decode(DeezerArtistSearchResponse.self, from: output.data)
                 if let firstArtist = response.data.first {
                     return URL(string: firstArtist.picture_medium)
                 }
                 return nil
             }
-            .replaceError(with: nil)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] url in
-                if let url = url {
-                    Self.updateCache(artist: cacheKey, url: url)
-                    self?.imageURL = url
+            .sink(
+                receiveCompletion: { completion in
+                    if case .failure = completion {
+                        // Transient network errors are not recorded as permanent misses.
+                    }
+                },
+                receiveValue: { [weak self] resolvedURL in
+                    if let resolvedURL = resolvedURL {
+                        Self.recordHit(artistKey: cacheKey, url: resolvedURL)
+                        self?.imageURL = resolvedURL
+                    } else {
+                        Self.recordMiss(artistKey: cacheKey)
+                    }
                 }
-            }
+            )
     }
 }
 

@@ -5,75 +5,120 @@ import MediaPlayer
 import AVFoundation
 import UIKit
 
-struct ServerSong: Codable, Identifiable {
-    let id: Int64
-    let persistentId: UInt64
-    let title: String
-    let artist: String
-    let album: String
-    let filename: String
-    let duration: TimeInterval
-    
-    var durationFormatted: String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
-}
-
 class MusicServerManager: ObservableObject {
     static let shared = MusicServerManager()
+    static let sharedLogPath = "/tmp/audiostreamer.log"
     
     @Published var isRunning = false
     @Published var serverStatus = "Stopped"
     @Published var serverAddress: String?
     @Published var songCount = 0
-    @Published var songs: [ServerSong] = []
-    @Published var playlists: [Playlist] = []
     @Published var errorMessage: String?
     @Published var autoOffEnabled: Bool = false {
         didSet {
             UserDefaults.standard.set(autoOffEnabled, forKey: "RC_AutoOffEnabled")
-            // Sync to shared files so the CLI script knows the setting
-            let flagPath = "/tmp/audiostream_autooff.enabled"
-            let timeoutPath = "/tmp/audiostream_autooff.timeout"
-            try? (autoOffEnabled ? "1" : "0").write(toFile: flagPath, atomically: true, encoding: .utf8)
-            try? "\(autoOffInterval)".write(toFile: timeoutPath, atomically: true, encoding: .utf8)
+            syncAutoOffFiles()
+        }
+    }
+    @Published var autoOffTimeoutMinutes: Int = 10 {
+        didSet {
+            let clamped = max(1, autoOffTimeoutMinutes)
+            if clamped != autoOffTimeoutMinutes {
+                autoOffTimeoutMinutes = clamped
+                return
+            }
+            UserDefaults.standard.set(clamped, forKey: "RC_AutoOffTimeoutMinutes")
+            syncAutoOffFiles()
         }
     }
     
     private let port: UInt16 = 18080
     private let dbPath = "/var/mobile/Media/iTunes_Control/iTunes/MediaLibrary.sqlitedb"
-    private let logPath = "/tmp/audiostreamer.log"
-    private let monitorScriptPath = "/tmp/autooff_monitor.sh"
-    private let monitorPidPath = "/tmp/autooff_monitor.pid"
-    private let autoOffInterval: Int = 600 // 10 minutes for production
+    private let logPath = MusicServerManager.sharedLogPath
+    private var autoOffInterval: Int { max(60, autoOffTimeoutMinutes * 60) }
     
     private var statusTimer: Timer?
     private var startupRetries = 0
     private var consecutiveFailures = 0
     private let maxConsecutiveFailures = 3
     private var isCheckingStatus = false
+    private var observers: [NSObjectProtocol] = []
+
+    var canHostLocalServer: Bool {
+        let fm = FileManager.default
+        return fm.fileExists(atPath: "/var/jb/usr/bin/audiostream")
+            || fm.fileExists(atPath: "/usr/bin/audiostream")
+            || fm.fileExists(atPath: "/var/jb/usr/libexec/audiostreamerd")
+            || fm.fileExists(atPath: "/usr/libexec/audiostreamerd")
+    }
+
+    var hasLocalMediaDatabase: Bool {
+        FileManager.default.fileExists(atPath: dbPath)
+    }
+
+    var hasAnyHostCapability: Bool {
+        canHostLocalServer || hasLocalMediaDatabase
+    }
     
     private init() {
         signal(SIGCHLD, SIG_IGN) // Automatically reap terminated child processes (prevents zombies)
-        self.autoOffEnabled = UserDefaults.standard.bool(forKey: "RC_AutoOffEnabled")
-        
-        // Sync initial state to shared files
-        let flagPath = "/tmp/audiostream_autooff.enabled"
-        let timeoutPath = "/tmp/audiostream_autooff.timeout"
-        try? (self.autoOffEnabled ? "1" : "0").write(toFile: flagPath, atomically: true, encoding: .utf8)
-        try? "\(autoOffInterval)".write(toFile: timeoutPath, atomically: true, encoding: .utf8)
+        loadAutoOffPreferences()
         
         let userWantsRunning = UserDefaults.standard.bool(forKey: "RC_UserWantsServerRunning")
-        if userWantsRunning {
+        if canHostLocalServer && userWantsRunning {
             self.isRunning = true
             self.serverStatus = "Starting..."
         }
         
-        checkServerStatus()
-        startStatusTimer()
+        if canHostLocalServer {
+            syncAutoOffFiles()
+            if userWantsRunning {
+                checkServerStatus()
+                updateStatusTimerState()
+            }
+        }
         setupLifecycleObservers()
+    }
+
+    deinit {
+        stopStatusTimer()
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func loadAutoOffPreferences() {
+        self.autoOffEnabled = UserDefaults.standard.bool(forKey: "RC_AutoOffEnabled")
+        let storedMinutes = UserDefaults.standard.integer(forKey: "RC_AutoOffTimeoutMinutes")
+        self.autoOffTimeoutMinutes = storedMinutes > 0 ? storedMinutes : 10
+    }
+
+    private func syncAutoOffFiles() {
+        guard canHostLocalServer else { return }
+        let flagPath = "/tmp/audiostream_autooff.enabled"
+        let timeoutPath = "/tmp/audiostream_autooff.timeout"
+        try? (autoOffEnabled ? "1" : "0").write(toFile: flagPath, atomically: true, encoding: .utf8)
+        try? "\(autoOffInterval)".write(toFile: timeoutPath, atomically: true, encoding: .utf8)
+    }
+
+    static func readLogTail(maxBytes: Int = 32 * 1024) -> String {
+        guard let handle = FileHandle(forReadingAtPath: sharedLogPath) else {
+            return ""
+        }
+        defer { try? handle.close() }
+        let fileSize = handle.seekToEndOfFile()
+        let keep = UInt64(max(1024, maxBytes))
+        if fileSize > keep {
+            handle.seek(toFileOffset: fileSize - keep)
+        } else {
+            handle.seek(toFileOffset: 0)
+        }
+        let data = handle.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    static func clearLogs() {
+        try? FileManager.default.removeItem(atPath: sharedLogPath)
     }
     
     private var isBatterySaverEnabled: Bool {
@@ -84,22 +129,43 @@ class MusicServerManager: ObservableObject {
     }
     
     private func setupLifecycleObservers() {
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+        let bg = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
             if self.isBatterySaverEnabled {
                 self.stopStatusTimer()
             }
         }
+        observers.append(bg)
         
-        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self = self else { return }
-            self.checkServerStatus()
-            self.startStatusTimer()
+        let fg = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, self.canHostLocalServer else { return }
+            let wantsRunning = self.isRunning || UserDefaults.standard.bool(forKey: "RC_UserWantsServerRunning")
+            if wantsRunning {
+                self.checkServerStatus()
+                self.updateStatusTimerState()
+            }
         }
+        observers.append(fg)
+
+        let restore = NotificationCenter.default.addObserver(forName: .appStateDidRestore, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            self.loadAutoOffPreferences()
+            self.syncAutoOffFiles()
+        }
+        observers.append(restore)
     }
     
+    private func updateStatusTimerState() {
+        let wantsRunning = isRunning || serverStatus == "Starting..." || UserDefaults.standard.bool(forKey: "RC_UserWantsServerRunning")
+        if canHostLocalServer && wantsRunning {
+            startStatusTimer()
+        } else {
+            stopStatusTimer()
+        }
+    }
+
     private func startStatusTimer() {
-        guard statusTimer == nil else { return }
+        guard canHostLocalServer, statusTimer == nil else { return }
         // Poll server status every 3 seconds (UI refresh only — NOT for idle detection)
         statusTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
@@ -211,6 +277,7 @@ class MusicServerManager: ObservableObject {
                                     self.isRunning = false
                                     self.serverStatus = "Stopped"
                                     self.serverAddress = nil
+                                    self.updateStatusTimerState()
                                 }
                             }
                         }
@@ -246,6 +313,7 @@ class MusicServerManager: ObservableObject {
                                     self.isRunning = false
                                     self.serverStatus = "Stopped"
                                     self.serverAddress = nil
+                                    self.updateStatusTimerState()
                                 }
                             }
                         }
@@ -258,6 +326,7 @@ class MusicServerManager: ObservableObject {
                     self.isRunning = false
                     self.serverStatus = "Stopped"
                     self.serverAddress = nil
+                    self.updateStatusTimerState()
                 }
             }
         }.resume()
@@ -274,6 +343,7 @@ class MusicServerManager: ObservableObject {
         self.isRunning = true
         self.serverStatus = "Starting..."
         self.errorMessage = nil
+        self.updateStatusTimerState()
         
         // Immediately perform health check to see if server is already active
         guard let checkURL = URL(string: "http://127.0.0.1:\(port)/api/ping") else { return }
@@ -364,99 +434,6 @@ class MusicServerManager: ObservableObject {
         }
     }
     
-    /// Writes and launches a standalone shell script that monitors activity in the log
-    /// and kills audiostreamerd after `autoOffInterval` seconds of idle.
-    /// The script runs in its own process group — completely independent of the app.
-    private func startMonitor(daemonPid: pid_t, shPath: String) {
-        let timeout = autoOffInterval
-        
-        let script = """
-#!/bin/sh
-LOG="\(logPath)"
-TIMEOUT=\(timeout)
-DAEMON_PID=\(daemonPid)
-LAST_COUNT=0
-LAST_ACTIVITY=$(date +%s)
-
-while true; do
-    sleep 15
-
-    # Stop monitor if daemon is already gone
-    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-        exit 0
-    fi
-
-    # Count real remote activity (artwork, music stream requests) — excludes healthchecks
-    CURR=$(grep -v -e '/api/songs' -e 'New connection received' "$LOG" 2>/dev/null | wc -l | tr -d ' ')
-
-    if [ "$CURR" -gt "$LAST_COUNT" ]; then
-        LAST_COUNT=$CURR
-        LAST_ACTIVITY=$(date +%s)
-    fi
-
-    AGE=$(( $(date +%s) - LAST_ACTIVITY ))
-    if [ "$AGE" -ge "$TIMEOUT" ]; then
-        echo "[$(date)] Auto-off monitor: idle ${AGE}s >= ${TIMEOUT}s, killing daemon PID $DAEMON_PID" >> "$LOG"
-        kill -9 "$DAEMON_PID" 2>/dev/null
-        exit 0
-    fi
-done
-"""
-        
-        do {
-            try script.write(toFile: monitorScriptPath, atomically: true, encoding: .utf8)
-        } catch {
-            serverLog("Failed to write monitor script: \(error)")
-            return
-        }
-        
-        // chmod +x then launch it in its own process group
-        var monitorPid: pid_t = 0
-        let command = "chmod +x \(monitorScriptPath) && exec \(monitorScriptPath)"
-        var monitorArgs: [UnsafeMutablePointer<CChar>?] = [strdup(shPath), strdup("-c"), strdup(command), nil]
-        var envArgs = createEnvArgs()
-        
-        var spawnAttrs: posix_spawnattr_t?
-        posix_spawnattr_init(&spawnAttrs)
-        // Detach into its own process group — survives app backgrounding/suspension
-        posix_spawnattr_setflags(&spawnAttrs, Int16(POSIX_SPAWN_SETPGROUP))
-        posix_spawnattr_setpgroup(&spawnAttrs, 0)
-        
-        let monitorResult = posix_spawn(&monitorPid, shPath, nil, &spawnAttrs, &monitorArgs, &envArgs)
-        posix_spawnattr_destroy(&spawnAttrs)
-        for arg in monitorArgs { if let arg = arg { free(arg) } }
-        freeEnvArgs(envArgs)
-        
-        if monitorResult == 0 {
-            // Save monitor PID so we can kill it on stopServer()
-            try? "\(monitorPid)".write(toFile: monitorPidPath, atomically: true, encoding: .utf8)
-            serverLog("Auto-off monitor started: pid=\(monitorPid), timeout=\(timeout)s, watching daemon pid=\(daemonPid)")
-        } else {
-            serverLog("Failed to start monitor: error \(monitorResult)")
-        }
-    }
-    
-    /// Kill the running monitor process if one exists.
-    private func killMonitor() {
-        guard let pidStr = try? String(contentsOfFile: monitorPidPath, encoding: .utf8),
-              let monitorPid = pid_t(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
-        kill(monitorPid, SIGKILL)
-        try? FileManager.default.removeItem(atPath: monitorPidPath)
-        serverLog("Killed existing monitor pid=\(monitorPid)")
-    }
-    
-    private func killExistingDaemonProcesses() {
-        var pid: pid_t = 0
-        let path = FileManager.default.fileExists(atPath: "/var/jb/bin/sh") ? "/var/jb/bin/sh" : "/bin/sh"
-        let command = "for p in $(ps aux 2>/dev/null | grep '[a]udiostreamerd' | awk '{print $2}'); do kill -9 $p 2>/dev/null; done"
-        var cArgs: [UnsafeMutablePointer<CChar>?] = [strdup(path), strdup("-c"), strdup(command), nil]
-        var envArgs = createEnvArgs()
-        let result = posix_spawn(&pid, path, nil, nil, &cArgs, &envArgs)
-        serverLog("killExistingDaemonProcesses result: \(result), pid: \(pid)")
-        for arg in cArgs { if let arg = arg { free(arg) } }
-        freeEnvArgs(envArgs)
-    }
-    
     func stopServer() {
         serverLog("Stopping server...")
         
@@ -468,9 +445,10 @@ done
         self.serverStatus = "Stopped"
         self.serverAddress = nil
         self.errorMessage = nil
+        self.updateStatusTimerState()
         
-        // Kill the monitor first so it doesn't race with our kill
-        killMonitor()
+        try? FileManager.default.removeItem(atPath: "/tmp/autooff_monitor.pid")
+        try? FileManager.default.removeItem(atPath: "/tmp/autooff_monitor.sh")
         
         // Execute audiostream stop if available, or killall -9
         let audiostreamCmd = FileManager.default.fileExists(atPath: "/var/jb/usr/bin/audiostream")
@@ -554,18 +532,6 @@ done
 }
 
 private func serverLog(_ message: String) {
-    let msg = "[\(Date())] \(message)\n"
-    if let data = msg.data(using: .utf8) {
-        let logURL = URL(fileURLWithPath: "/tmp/audiostreamer.log")
-        if FileManager.default.fileExists(atPath: logURL.path) {
-            if let fileHandle = try? FileHandle(forWritingTo: logURL) {
-                fileHandle.seekToEndOfFile()
-                fileHandle.write(data)
-                fileHandle.closeFile()
-            }
-        } else {
-            try? data.write(to: logURL)
-        }
-    }
+    AppCacheStorage.appendBoundedLog(message, to: MusicServerManager.sharedLogPath, maxBytes: 512 * 1024)
     print(message)
 }

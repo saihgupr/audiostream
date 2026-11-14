@@ -15,7 +15,7 @@ enum MusicLibraryError: LocalizedError {
 }
 
 struct RemoteLibraryCacheData: Codable {
-    static let currentVersion = 3
+    static let currentVersion = 4
     let version: Int
     let serverURL: String
     let albums: [Album]
@@ -29,6 +29,17 @@ class RemoteLibraryDiskCache {
         let urls = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
         return urls.first!.appendingPathComponent("remote_library_cache.json")
     }()
+
+    var diskSizeBytes: UInt64 {
+        AppCacheStorage.fileSizeBytes(at: cacheFileUrl)
+    }
+
+    func clear() {
+        lock.lock()
+        snapshot = nil
+        lock.unlock()
+        AppCacheStorage.removeItemIfExists(at: cacheFileUrl)
+    }
     
     private struct Snapshot {
         let serverURL: String
@@ -194,26 +205,21 @@ class MusicLibraryService: ObservableObject {
             .eraseToAnyPublisher()
     }
     
-    private func fetchRemoteTracks(forceRefresh: Bool, baseURL: URL) -> AnyPublisher<[Track], Error> {
-        var songsURL = baseURL.appendingPathComponent("/api/songs")
-        if forceRefresh, var components = URLComponents(url: songsURL, resolvingAgainstBaseURL: false) {
-            components.queryItems = [URLQueryItem(name: "refresh", value: "true")]
-            if let u = components.url {
-                songsURL = u
-            }
-        }
-        var request = URLRequest(url: songsURL)
-        if forceRefresh {
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-        }
-        
+    private func fetchRemoteJSON<T: Decodable>(_ type: T.Type, path: String, forceRefresh: Bool, baseURL: URL) -> AnyPublisher<T, Error> {
+        let url = apiURL(baseURL: baseURL, path: path, forceRefresh: forceRefresh)
+        let request = makeRequest(url: url, forceRefresh: forceRefresh)
+
         return URLSession.shared.dataTaskPublisher(for: request)
             .handleEvents(receiveOutput: { [weak self] _ in
                 self?.connectionService.markConnected(url: baseURL.absoluteString)
             })
             .map { $0.data }
-            .decode(type: [Track].self, decoder: JSONDecoder())
+            .decode(type: T.self, decoder: JSONDecoder())
             .eraseToAnyPublisher()
+    }
+
+    private func fetchRemoteTracks(forceRefresh: Bool, baseURL: URL) -> AnyPublisher<[Track], Error> {
+        fetchRemoteJSON([Track].self, path: "/api/songs", forceRefresh: forceRefresh, baseURL: baseURL)
     }
     
     private func hydrate(_ track: Track, baseURL: URL) -> Track {
@@ -224,16 +230,34 @@ class MusicLibraryService: ObservableObject {
     }
     
     private func makeAlbums(from tracks: [Track], baseURL: URL) -> [Album] {
-        // Group tracks by Album Name (and Artist to be safe)
-        let grouped = Dictionary(grouping: tracks) { $0.album }
+        let grouped = Dictionary(grouping: tracks) {
+            AlbumGrouping.remoteAlbumOwnerKey(albumName: $0.album, track: $0)
+        }
         
-        let rawAlbums = grouped.map { (albumName, albumTracks) -> Album in
+        let rawAlbums = grouped.map { (ownerKey, albumTracks) -> Album in
             // Deterministic artwork pick: sort before picking first so
             // repeated fetches (server JSON order varies) yield same id.
             let orderedForArtwork = albumTracks.sorted(by: Track.compareTrackOrder)
-            let artist = orderedForArtwork.first?.artist ?? "Unknown Artist"
-            // Use the persistentId of the first track for album artwork
             let firstTrack = orderedForArtwork.first
+            let albumName = firstTrack?.album ?? "Unknown Album"
+            let artist: String = {
+                if let albumArtist = orderedForArtwork.compactMap({ $0.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { !$0.isEmpty }) {
+                    return albumArtist
+                }
+                let primaryKeys = Set(orderedForArtwork.map { AlbumGrouping.primaryArtistKey(for: $0.artist) })
+                if primaryKeys.count == 1,
+                   let canonical = orderedForArtwork.map({ $0.artist.trimmingCharacters(in: .whitespacesAndNewlines) }).filter({ !$0.isEmpty }).min(by: { $0.count < $1.count }) {
+                    return canonical
+                }
+                if let path = firstTrack?.filename {
+                    let components = path.split(separator: "/", omittingEmptySubsequences: true)
+                    if components.count >= 3, !components[0].isEmpty {
+                        return String(components[0])
+                    }
+                }
+                return firstTrack?.artist ?? "Unknown Artist"
+            }()
+            // Use the persistentId of the first track for album artwork
             let artworkUrl = firstTrack.map {
                 baseURL.appendingPathComponent("/artwork/\($0.persistentId)")
             }
@@ -241,7 +265,7 @@ class MusicLibraryService: ObservableObject {
             let latestDate = albumTracks.compactMap { $0.dateAdded }.max()
             
             return Album(
-                id: albumName, // Simple ID for now
+                id: ownerKey,
                 title: albumName,
                 artist: artist,
                 artworkUrl: artworkUrl,
@@ -337,24 +361,7 @@ class MusicLibraryService: ObservableObject {
             return Fail(error: URLError(.badURL)).eraseToAnyPublisher()
         }
         
-        var playlistsURL = baseURL.appendingPathComponent("/api/playlists")
-        if forceRefresh, var components = URLComponents(url: playlistsURL, resolvingAgainstBaseURL: false) {
-            components.queryItems = [URLQueryItem(name: "refresh", value: "true")]
-            if let u = components.url {
-                playlistsURL = u
-            }
-        }
-        var request = URLRequest(url: playlistsURL)
-        if forceRefresh {
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-        }
-        
-        return URLSession.shared.dataTaskPublisher(for: request)
-            .handleEvents(receiveOutput: { [weak self] _ in
-                self?.connectionService.markConnected(url: baseURL.absoluteString)
-            })
-            .map { $0.data }
-            .decode(type: [Playlist].self, decoder: JSONDecoder())
+        return fetchRemoteJSON([Playlist].self, path: "/api/playlists", forceRefresh: forceRefresh, baseURL: baseURL)
             .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
     }
@@ -613,9 +620,19 @@ class MusicLibraryService: ObservableObject {
         }
         return success
     }
-    
-    func deleteTrack(_ track: Track) -> Bool {
-        deletionLog("deleteTrack called for '\(track.title)' (id: \(track.id), persistentId: '\(track.persistentId)')")
+
+    func deleteAlbumAsync(_ album: Album) async -> Bool {
+        var success = true
+        for track in album.tracks {
+            if !(await deleteTrackAsync(track)) {
+                success = false
+            }
+        }
+        return success
+    }
+
+    func deleteTrackAsync(_ track: Track) async -> Bool {
+        deletionLog("deleteTrackAsync called for '\(track.title)' (id: \(track.id), persistentId: '\(track.persistentId)')")
         if connectionService.librarySource == .remote {
             guard let baseURL = URL(string: connectionService.serverURL) else {
                 deletionLog("Remote delete FAILED: invalid serverURL")
@@ -624,22 +641,43 @@ class MusicLibraryService: ObservableObject {
             let deleteURL = baseURL.appendingPathComponent("/api/delete")
             var request = URLRequest(url: deleteURL)
             request.httpMethod = "POST"
+            request.timeoutInterval = 8.0
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let payload: [String: Any] = ["type": "song", "id": track.id]
             request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-            
-            let semaphore = DispatchSemaphore(value: 0)
-            var success = false
-            URLSession.shared.dataTask(with: request) { data, response, error in
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    success = true
-                }
-                semaphore.signal()
-            }.resume()
-            _ = semaphore.wait(timeout: .now() + 5.0)
-            deletionLog("Remote delete completed. Success: \(success)")
-            return success
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                let success = (response as? HTTPURLResponse)?.statusCode == 200
+                deletionLog("Remote async delete completed. Success: \(success)")
+                return success
+            } catch {
+                deletionLog("Remote async delete FAILED: \(error)")
+                return false
+            }
         }
+
+        return await Task.detached(priority: .userInitiated) {
+            self.deleteLocalTrack(track)
+        }.value
+    }
+
+    func deletePlaylistAsync(_ playlist: Playlist) async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            self.deletePlaylist(playlist)
+        }.value
+    }
+    
+    func deleteTrack(_ track: Track) -> Bool {
+        deletionLog("deleteTrack called for '\(track.title)' (id: \(track.id), persistentId: '\(track.persistentId)')")
+        if connectionService.librarySource == .remote {
+            deletionLog("deleteTrack synchronous call is unsupported for .remote; use deleteTrackAsync")
+            return false
+        }
+        return deleteLocalTrack(track)
+    }
+
+    private func deleteLocalTrack(_ track: Track) -> Bool {
         
         // Branch A: local file track (from AudioStreamMusic folder) – just delete the file
         if track.persistentId.hasPrefix("localfile-") {

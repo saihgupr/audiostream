@@ -23,13 +23,22 @@ class AudioPlayerService: ObservableObject {
     @Published var queuedAlbumTitles: Set<String> = []
     
     private var librarySource: LibrarySource {
-        let sourceString = UserDefaults.standard.string(forKey: "RC_LibrarySource") ?? LibrarySource.local.rawValue
-        return LibrarySource(rawValue: sourceString) ?? .local
+        if let configured = connectionService?.librarySource {
+            return configured
+        }
+        let sourceString = UserDefaults.standard.string(forKey: "RC_LibrarySource") ?? LibrarySource.remote.rawValue
+        return LibrarySource(rawValue: sourceString) ?? .remote
     }
     
     private var serverURL: String {
+        if let configured = connectionService?.serverURL, !configured.isEmpty {
+            return configured
+        }
         return UserDefaults.standard.string(forKey: "RC_ServerURL") ?? ""
     }
+
+    weak var connectionService: ServerConnectionService?
+    private var restoreObserver: NSObjectProtocol?
     
     private var player: AVPlayer?
     private var timeObserver: Any?
@@ -41,6 +50,30 @@ class AudioPlayerService: ObservableObject {
     private var lastRequestedArtworkTrackId: Int64?
     
     init() {
+        applyVolumePreferenceFromDefaults()
+        configureAudioSession()
+        setupRemoteCommandCenter()
+        setupDarwinCommandListeners()
+        restoreObserver = NotificationCenter.default.addObserver(forName: .appStateDidRestore, object: nil, queue: .main) { [weak self] _ in
+            self?.applyVolumePreferenceFromDefaults()
+        }
+    }
+
+    deinit {
+        if let restoreObserver = restoreObserver {
+            NotificationCenter.default.removeObserver(restoreObserver)
+        }
+    }
+
+    func configure(connectionService: ServerConnectionService) {
+        self.connectionService = connectionService
+    }
+
+    private func resolvedConnectionService() -> ServerConnectionService {
+        connectionService ?? ServerConnectionService(startMonitoring: false)
+    }
+
+    private func applyVolumePreferenceFromDefaults() {
         let showVolume = UserDefaults.standard.object(forKey: "RC_ShowVolumeSlider") as? Bool ?? true
         if showVolume {
             let savedVolume = UserDefaults.standard.object(forKey: "audio_player_volume") as? Float ?? 1.0
@@ -48,15 +81,20 @@ class AudioPlayerService: ObservableObject {
         } else {
             state.volume = 1.0
         }
-        configureAudioSession()
-        setupRemoteCommandCenter()
-        setupDarwinCommandListeners()
+        player?.volume = state.volume
+    }
+
+    private var preservePlaybackModes: Bool {
+        if UserDefaults.standard.object(forKey: "RC_PreservePlaybackModes") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "RC_PreservePlaybackModes")
     }
     
     // MARK: - Audio Session
     private func configureAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetooth, .allowBluetoothA2DP])
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetoothHFP, .allowBluetoothA2DP])
             try AVAudioSession.sharedInstance().setActive(true)
             UIApplication.shared.beginReceivingRemoteControlEvents()
             setupAudioSessionObservers()
@@ -297,8 +335,11 @@ class AudioPlayerService: ObservableObject {
     
     // MARK: - Playback Control
     func play(tracks: [Track], startingAt index: Int) {
+        guard !tracks.isEmpty, tracks.indices.contains(index) else { return }
         originalQueue = tracks
-        state.repeatMode = .all // Default to loop playback when starting an album/queue
+        if !preservePlaybackModes {
+            state.repeatMode = .all
+        }
         if state.isShuffleEnabled {
             let currentTrack = tracks[index]
             var remainingTracks = tracks
@@ -320,7 +361,12 @@ class AudioPlayerService: ObservableObject {
         debugLog("setQueueWithNewTracks called with \(tracks.count) tracks, currentTrack='\(currentTrack.title)' (persistentId: '\(currentTrack.persistentId)'), shuffle=\(shuffle)")
         
         self.originalQueue = tracks
-        self.state.repeatMode = .all // Default to loop playback when setting new queue
+        if !self.preservePlaybackModes {
+            self.state.repeatMode = .all
+        }
+        if shuffle {
+            self.state.isShuffleEnabled = true
+        }
         
         if shuffle || self.state.isShuffleEnabled {
             // Shuffle EXCEPT the current track, which goes to index 0
@@ -452,7 +498,12 @@ class AudioPlayerService: ObservableObject {
             queueIndex = 0
             loadTrack(at: queueIndex)
         } else {
+            player?.pause()
+            player?.seek(to: .zero)
             state.isPlaying = false
+            progress.currentTime = 0
+            stopObservingTime()
+            updateNowPlayingInfo(elapsedTimeOverride: 0)
         }
     }
     
@@ -549,8 +600,10 @@ class AudioPlayerService: ObservableObject {
     
     func addToQueue(albumTitle: String, tracks: [Track]) {
         print("Adding album '\(albumTitle)' (\(tracks.count) tracks) to queue. Current queue size: \(queue.count), current index: \(queueIndex)")
-        state.isShuffleEnabled = false // Default to unshuffled playback when queuing an album
-        state.repeatMode = .all // Default to loop playback when queuing an album
+        if !preservePlaybackModes {
+            state.isShuffleEnabled = false
+            state.repeatMode = .all
+        }
         var newTracks = tracks
         
         // If the currently playing track is the first song of the queued album, skip that first song
@@ -589,7 +642,9 @@ class AudioPlayerService: ObservableObject {
     
     func addToQueue(tracks: [Track]) {
         print("Adding \(tracks.count) tracks to queue. Current queue size: \(queue.count), current index: \(queueIndex)")
-        state.repeatMode = .all // Default to loop playback when queuing tracks
+        if !preservePlaybackModes {
+            state.repeatMode = .all
+        }
         let newTracks = tracks
         
         let insertIndex = queueIndex + 1
@@ -761,13 +816,18 @@ class AudioPlayerService: ObservableObject {
         removeTrackFromQueue(track: currentTrack)
         
         // Delete track from library database and storage
-        let connectionService = ServerConnectionService()
-        let libraryService = MusicLibraryService(connectionService: connectionService)
-        if libraryService.deleteTrack(currentTrack) {
-            print("[AudioReceiver] deletesong: successfully deleted '\(currentTrack.title)'")
-            NotificationCenter.default.post(name: .trackDidDelete, object: currentTrack)
-        } else {
-            print("[AudioReceiver] deletesong: failed to delete '\(currentTrack.title)'")
+        let connection = resolvedConnectionService()
+        let libraryService = MusicLibraryService(connectionService: connection)
+        Task {
+            let success = await libraryService.deleteTrackAsync(currentTrack)
+            await MainActor.run {
+                if success {
+                    print("[AudioReceiver] deletesong: successfully deleted '\(currentTrack.title)'")
+                    NotificationCenter.default.post(name: .trackDidDelete, object: currentTrack)
+                } else {
+                    print("[AudioReceiver] deletesong: failed to delete '\(currentTrack.title)'")
+                }
+            }
         }
     }
     
@@ -807,7 +867,7 @@ class AudioPlayerService: ObservableObject {
     }
 
     private func fetchAlbumTracks(albumName: String, currentTrack: Track, handler: @escaping ([Track]) -> Void) {
-        let service = MusicLibraryService(connectionService: ServerConnectionService())
+        let service = MusicLibraryService(connectionService: resolvedConnectionService())
         service.fetchAllTracks()
             .receive(on: DispatchQueue.main)
             .sink(
@@ -817,7 +877,13 @@ class AudioPlayerService: ObservableObject {
                     }
                 },
                 receiveValue: { allTracks in
-                    var albumTracks = allTracks.filter { $0.album.localizedCaseInsensitiveCompare(albumName) == .orderedSame }
+                    let exactMatch = allTracks.filter {
+                        $0.album.localizedCaseInsensitiveCompare(albumName) == .orderedSame &&
+                        $0.artist.localizedCaseInsensitiveCompare(currentTrack.artist) == .orderedSame
+                    }
+                    var albumTracks = !exactMatch.isEmpty ? exactMatch : allTracks.filter {
+                        $0.album.localizedCaseInsensitiveCompare(albumName) == .orderedSame
+                    }
 
                     if albumTracks.isEmpty {
                         albumTracks = allTracks.filter { track in
@@ -834,7 +900,7 @@ class AudioPlayerService: ObservableObject {
     }
 
     private func fetchArtistTracks(artistName: String, handler: @escaping ([Track]) -> Void) {
-        let service = MusicLibraryService(connectionService: ServerConnectionService())
+        let service = MusicLibraryService(connectionService: resolvedConnectionService())
         service.fetchAllTracks()
             .receive(on: DispatchQueue.main)
             .sink(
@@ -897,8 +963,7 @@ class AudioPlayerService: ObservableObject {
         print("[AudioReceiver] shuffleall: shuffling all songs (attempt \(attempt))")
         debugLog("shuffleall attempt \(attempt)")
         
-        let connectionService = ServerConnectionService()
-        let service = MusicLibraryService(connectionService: connectionService)
+        let service = MusicLibraryService(connectionService: resolvedConnectionService())
         
         service.fetchAllTracks(forceRefresh: true)
             .receive(on: DispatchQueue.main)
@@ -940,8 +1005,7 @@ class AudioPlayerService: ObservableObject {
         deletePendingCommandFile()
         print("[AudioReceiver] randomalbum: playing a random album (attempt \(attempt))")
         
-        let connectionService = ServerConnectionService()
-        let service = MusicLibraryService(connectionService: connectionService)
+        let service = MusicLibraryService(connectionService: resolvedConnectionService())
         
         Publishers.CombineLatest(
             service.fetchAlbums().catch { _ in Just([]) },
@@ -990,7 +1054,9 @@ class AudioPlayerService: ObservableObject {
             let sortedTracks = pick.tracks.sorted(by: Track.compareTrackOrder)
             print("[AudioReceiver] randomalbum: playing \(sortedTracks.count) tracks for album '\(pick.album.title)'")
             
-            self.state.isShuffleEnabled = false
+            if !self.preservePlaybackModes {
+                self.state.isShuffleEnabled = false
+            }
             self.play(tracks: sortedTracks, startingAt: 0)
         }
         .store(in: &commandCancellables)
@@ -1020,9 +1086,9 @@ class AudioPlayerService: ObservableObject {
         
         print("[AudioReceiver] playplaylist: searching for playlist '\(playlistName)' (attempt \(attempt))")
         
-        let connectionService = ServerConnectionService()
-        let service = MusicLibraryService(connectionService: connectionService)
-        let source = connectionService.librarySource
+        let connection = resolvedConnectionService()
+        let service = MusicLibraryService(connectionService: connection)
+        let source = connection.librarySource
         let playlistNameCopy = playlistName
         let shuffleCopy = shuffle
         let attemptCopy = attempt
@@ -1036,7 +1102,12 @@ class AudioPlayerService: ObservableObject {
         .sink { [weak self] loadedAlbums, loadedPlaylists, loadedTracks in
             guard let self = self else { return }
             
-            let allPlaylists = self.buildAllPlaylists(albums: loadedAlbums, userPlaylists: loadedPlaylists, tracks: loadedTracks, source: source)
+            let allPlaylists = LibraryPlaylistBuilder.combinePlaylists(
+                userPlaylists: loadedPlaylists,
+                albums: loadedAlbums,
+                tracks: loadedTracks,
+                source: source
+            )
             
             let matchedPlaylist = allPlaylists.first { $0.name.localizedCaseInsensitiveCompare(playlistNameCopy) == .orderedSame }
                 ?? allPlaylists.first { $0.name.localizedCaseInsensitiveContains(playlistNameCopy) }
@@ -1054,9 +1125,8 @@ class AudioPlayerService: ObservableObject {
             if !targetPlaylist.tracks.isEmpty {
                 tracksToPlay = targetPlaylist.tracks
             } else {
-                tracksToPlay = targetPlaylist.songIds.compactMap { id in
-                    loadedTracks.first(where: { $0.id == id })
-                }
+                let tracksById = Dictionary(loadedTracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                tracksToPlay = targetPlaylist.songIds.compactMap { tracksById[$0] }
             }
             
             guard !tracksToPlay.isEmpty else {
@@ -1075,92 +1145,6 @@ class AudioPlayerService: ObservableObject {
             self.play(tracks: tracksToPlay, startingAt: 0)
         }
         .store(in: &commandCancellables)
-    }
-    
-    private func buildAllPlaylists(albums: [Album], userPlaylists: [Playlist], tracks: [Track], source: LibrarySource) -> [Playlist] {
-        var result = userPlaylists
-        
-        if source == .remote {
-            result = result.map { playlist -> Playlist in
-                var p = playlist
-                p.tracks = playlist.songIds.compactMap { id in
-                    tracks.first(where: { $0.id == id })
-                }
-                return p
-            }
-        }
-        
-        var albumDates: [String: Date] = [:]
-        for album in albums {
-            if let date = album.dateAdded {
-                albumDates[album.id] = date
-                albumDates["\(album.title.lowercased())|\(album.artist.lowercased())"] = date
-            }
-        }
-        
-        let now = Date()
-        let maxTrackId = tracks.map { $0.id }.max() ?? 0
-        var trackDates: [String: Date] = [:]
-        var tracksWithDates: [(track: Track, date: Date)] = []
-        
-        for track in tracks {
-            var trackDate: Date? = nil
-            let albumKey = "\(track.album.lowercased())|\(track.artist.lowercased())"
-            if let date = albumDates[albumKey] {
-                trackDate = date
-            }
-            if trackDate == nil {
-                let diff = Double(maxTrackId - track.id)
-                trackDate = now.addingTimeInterval(-diff * 3600)
-            }
-            if let date = trackDate {
-                trackDates[track.persistentId] = date
-                tracksWithDates.append((track, date))
-            }
-        }
-        
-        let twoWeeksAgo = now.addingTimeInterval(-14 * 24 * 3600)
-        let oneMonthAgo = now.addingTimeInterval(-30 * 24 * 3600)
-        let threeMonthsAgo = now.addingTimeInterval(-90 * 24 * 3600)
-        let sixMonthsAgo = now.addingTimeInterval(-180 * 24 * 3600)
-        let oneYearAgo = now.addingTimeInterval(-365 * 24 * 3600)
-        
-        let recentlyAddedTracks = tracksWithDates.filter { $0.date >= twoWeeksAgo }.map { $0.track }
-        let monthTracks = tracksWithDates.filter { $0.date >= oneMonthAgo }.map { $0.track }
-        let threeMonthsTracks = tracksWithDates.filter { $0.date >= threeMonthsAgo }.map { $0.track }
-        let sixMonthsTracks = tracksWithDates.filter { $0.date >= sixMonthsAgo }.map { $0.track }
-        let yearTracks = tracksWithDates.filter { $0.date >= oneYearAgo }.map { $0.track }
-        
-        var specialPlaylists: [Playlist] = []
-        
-        func sortTracksByDate(_ tracksToSort: [Track]) -> [Track] {
-            return tracksToSort.sorted { lhs, rhs in
-                let lhsDate = trackDates[lhs.persistentId] ?? Date(timeIntervalSince1970: 0)
-                let rhsDate = trackDates[rhs.persistentId] ?? Date(timeIntervalSince1970: 0)
-                if lhsDate != rhsDate { return lhsDate > rhsDate }
-                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-            }
-        }
-        
-        if !recentlyAddedTracks.isEmpty {
-            specialPlaylists.append(Playlist(id: -1, name: "Recently Added", songIds: recentlyAddedTracks.map { $0.id }, tracks: sortTracksByDate(recentlyAddedTracks)))
-        }
-        if !monthTracks.isEmpty {
-            specialPlaylists.append(Playlist(id: -2, name: "Month", songIds: monthTracks.map { $0.id }, tracks: sortTracksByDate(monthTracks)))
-        }
-        if !threeMonthsTracks.isEmpty {
-            specialPlaylists.append(Playlist(id: -3, name: "3 Months", songIds: threeMonthsTracks.map { $0.id }, tracks: sortTracksByDate(threeMonthsTracks)))
-        }
-        if !sixMonthsTracks.isEmpty {
-            specialPlaylists.append(Playlist(id: -4, name: "6 Months", songIds: sixMonthsTracks.map { $0.id }, tracks: sortTracksByDate(sixMonthsTracks)))
-        }
-        if !yearTracks.isEmpty {
-            specialPlaylists.append(Playlist(id: -5, name: "Year", songIds: yearTracks.map { $0.id }, tracks: sortTracksByDate(yearTracks)))
-        }
-        
-        result.removeAll { $0.id < 0 }
-        result.insert(contentsOf: specialPlaylists, at: 0)
-        return result
     }
     
     private func startObservingTime() {

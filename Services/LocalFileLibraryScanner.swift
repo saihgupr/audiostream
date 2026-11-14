@@ -215,6 +215,10 @@ class LocalFileArtworkCache {
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
 
+    var diskSizeBytes: UInt64 {
+        AppCacheStorage.directorySizeBytes(at: cacheDir)
+    }
+
     static func downscaledThumbnail(fromURL url: URL, maxPixelSize: CGFloat) -> UIImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return downscaledThumbnail(fromSource: source, maxPixelSize: maxPixelSize)
@@ -456,6 +460,17 @@ class LocalLibraryDiskCache {
         lock.unlock()
         return result
     }
+
+    var diskSizeBytes: UInt64 {
+        AppCacheStorage.fileSizeBytes(at: cacheFileUrl)
+    }
+
+    func clear() {
+        lock.lock()
+        snapshot = nil
+        lock.unlock()
+        AppCacheStorage.removeItemIfExists(at: cacheFileUrl)
+    }
 }
 
 // MARK: - Scanner
@@ -572,6 +587,20 @@ class LocalFileLibraryScanner {
         lock.lock()
         cachedTracks = nil
         lock.unlock()
+    }
+
+    var metadataCacheSizeBytes: UInt64 {
+        AppCacheStorage.fileSizeBytes(at: cacheFileUrl)
+    }
+
+    func clearAllCaches() {
+        lock.lock()
+        cachedTracks = nil
+        persistentCache = [:]
+        lock.unlock()
+        AppCacheStorage.removeItemIfExists(at: cacheFileUrl)
+        LocalLibraryDiskCache.shared.clear()
+        LocalFileArtworkCache.shared.clearDisk()
     }
 
     // MARK: - Public API

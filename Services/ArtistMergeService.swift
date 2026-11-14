@@ -29,6 +29,7 @@ class ArtistMergeService: ObservableObject {
             print("Error decoding artist merge groups: \(error)")
             self.mergeGroups = []
         }
+        syncMergeGroupsToSharedPath()
     }
     
     func saveGroups() {
@@ -38,6 +39,7 @@ class ArtistMergeService: ObservableObject {
             syncMergeGroupsToSharedPath()
             DispatchQueue.main.async {
                 self.objectWillChange.send()
+                NotificationCenter.default.post(name: .mergeGroupsDidChange, object: nil)
             }
         } catch {
             print("Error encoding artist merge groups: \(error)")

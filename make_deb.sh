@@ -77,34 +77,14 @@ if [ -z "$APP_BUNDLE" ]; then
 fi
 echo "📂 Found bundle: $(basename "$APP_BUNDLE")"
 
-# ── 4. Bundle Swift Concurrency compatibility library (for iOS 14 support) ───
-echo "📦 Embedding Swift Concurrency back-deploy library for iOS 14..."
-TOOLCHAIN_DIR=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
-SWIFT_CONCURRENCY_DYLIB="$TOOLCHAIN_DIR/usr/lib/swift-5.5/iphoneos/libswift_Concurrency.dylib"
-
-mkdir -p "$APP_BUNDLE/Frameworks"
-if [ -f "$SWIFT_CONCURRENCY_DYLIB" ]; then
-    cp "$SWIFT_CONCURRENCY_DYLIB" "$APP_BUNDLE/Frameworks/"
-    chmod 755 "$APP_BUNDLE/Frameworks/libswift_Concurrency.dylib"
-    echo "✅ Bundled libswift_Concurrency.dylib"
-else
-    echo "⚠️  Warning: libswift_Concurrency.dylib not found at $SWIFT_CONCURRENCY_DYLIB"
-fi
-
 BINARY="$APP_BUNDLE/$(basename "${APP_BUNDLE%.app}")"
 if [ ! -f "$BINARY" ]; then
     BINARY=$(find "$APP_BUNDLE" -maxdepth 1 -type f -perm +111 | head -n1)
 fi
 
-# Change /usr/lib/swift/libswift_Concurrency.dylib reference to @rpath
-install_name_tool -change /usr/lib/swift/libswift_Concurrency.dylib @rpath/libswift_Concurrency.dylib "$BINARY" 2>/dev/null || true
-
 # ── 5. Sign with ldid ─────────────────────────────────────────────────────────
 echo "🔐 Signing with ldid..."
 xattr -cr "$APP_BUNDLE"
-if [ -f "$APP_BUNDLE/Frameworks/libswift_Concurrency.dylib" ]; then
-    ldid -S "$APP_BUNDLE/Frameworks/libswift_Concurrency.dylib"
-fi
 ldid -S"$ENTITLEMENTS" "$BINARY"
 echo "✅ Signed"
 

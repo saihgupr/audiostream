@@ -665,11 +665,19 @@ class AudioStreamerDaemon {
         return customSongs
     }
     
+    private static let discTrackNumberRegex = try! NSRegularExpression(pattern: #"^\d+[._-](\d{1,3})(?![0-9A-Za-z])"#, options: [])
+    private static let leadingTrackNumberRegex = try! NSRegularExpression(pattern: #"^(?:track|trk)?\s*(\d{1,3})(?![0-9A-Za-z])"#, options: .caseInsensitive)
+
     private func extractTrackNumber(from filename: String) -> Int? {
-        let base = (filename as NSString).deletingPathExtension
-        let pattern = #"^(?:track|trk)?\s*(\d{1,3})\b"#
-        if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-           let match = regex.firstMatch(in: base, range: NSRange(location: 0, length: base.utf16.count)),
+        let base = (filename as NSString).deletingPathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return nil }
+        let fullRange = NSRange(location: 0, length: base.utf16.count)
+        if let match = Self.discTrackNumberRegex.firstMatch(in: base, range: fullRange),
+           let range = Range(match.range(at: 1), in: base),
+           let num = Int(base[range]), num > 0 {
+            return num
+        }
+        if let match = Self.leadingTrackNumberRegex.firstMatch(in: base, range: fullRange),
            let range = Range(match.range(at: 1), in: base),
            let num = Int(base[range]), num > 0 {
             return num

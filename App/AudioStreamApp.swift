@@ -112,6 +112,9 @@ struct AudioStreamApp: App {
                 .environmentObject(connectionService)
                 .environmentObject(audioService)
                 .preferredColorScheme(.dark)
+                .onAppear {
+                    audioService.configure(connectionService: connectionService)
+                }
                 .onChange(of: scenePhase) { phase in
                     if phase == .background {
                         AppStateBackupService.shared.save()

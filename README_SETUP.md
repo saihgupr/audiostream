@@ -35,7 +35,7 @@ This project was generated with a file-first approach. Since the `.xcodeproj` fi
 
 ## 4. Minimum Deployment Target
 1. Go to Project > Target > **General** > **Deployment Info**.
-2. Set **iOS Deployment Target** to **14.6**.
+2. Set **iOS Deployment Target** to **15.0**.
 
 ## 5. Deploy
 1. Open Terminal.

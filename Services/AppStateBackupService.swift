@@ -70,6 +70,7 @@ final class AppStateBackupService {
             let artistService = ArtistMergeService.shared
             albumService.loadGroups()
             artistService.loadGroups()
+            NotificationCenter.default.post(name: .appStateDidRestore, object: nil)
             return AppStateRestoreResult(
                 settingsCount: settingsCount,
                 albumGroups: albumService.mergeGroups.count,
@@ -93,6 +94,7 @@ final class AppStateBackupService {
         }
 
         guard restoredAny else { return nil }
+        NotificationCenter.default.post(name: .appStateDidRestore, object: nil)
         return AppStateRestoreResult(
             settingsCount: 0,
             albumGroups: AlbumMergeService.shared.mergeGroups.count,
@@ -122,7 +124,7 @@ struct AppStateRestoreResult {
     var summary: String {
         let merges = "\(albumGroups) album\(albumGroups == 1 ? "" : "s") and \(artistGroups) artist\(artistGroups == 1 ? "" : "s")"
         if usedFullBackup {
-            return "Restored \(settingsCount) settings, including \(merges).\n\nClose and reopen AudioStream so the server and playback settings apply."
+            return "Restored \(settingsCount) settings, including \(merges). Settings and library merges have been applied."
         }
         return "Restored \(merges). No full app backup was found, so settings were left as they are."
     }

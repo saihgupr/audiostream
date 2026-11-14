@@ -306,17 +306,22 @@ struct AlbumDetailView: View {
                 primaryButton: .destructive(Text("Delete")) {
                     if let track = selectedTrackForDelete {
                         let libraryService = MusicLibraryService(connectionService: connectionService)
-                        if libraryService.deleteTrack(track) {
-                            var updatedTracks = album.tracks
-                            updatedTracks.removeAll { $0.persistentId == track.persistentId }
-                            album = Album(
-                                id: album.id,
-                                title: album.title,
-                                artist: album.artist,
-                                artworkUrl: album.artworkUrl,
-                                tracks: updatedTracks
-                            )
-                            onTrackDeleted?(track)
+                        Task {
+                            let success = await libraryService.deleteTrackAsync(track)
+                            await MainActor.run {
+                                if success {
+                                    var updatedTracks = album.tracks
+                                    updatedTracks.removeAll { $0.persistentId == track.persistentId }
+                                    album = Album(
+                                        id: album.id,
+                                        title: album.title,
+                                        artist: album.artist,
+                                        artworkUrl: album.artworkUrl,
+                                        tracks: updatedTracks
+                                    )
+                                    onTrackDeleted?(track)
+                                }
+                            }
                         }
                     }
                     selectedTrackForDelete = nil

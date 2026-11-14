@@ -76,8 +76,8 @@ struct Track: Identifiable, Codable, Equatable {
 }
 
 extension Track {
-    private static let discTrackRegex = try! NSRegularExpression(pattern: "^\\d+[.-_](\\d{1,3})\\b")
-    private static let leadingNumRegex = try! NSRegularExpression(pattern: "^(?:track|trk)?\\s*(\\d{1,3})\\b", options: .caseInsensitive)
+    private static let discTrackRegex = try! NSRegularExpression(pattern: "^\\d+[._-](\\d{1,3})(?![0-9A-Za-z])")
+    private static let leadingNumRegex = try! NSRegularExpression(pattern: "^(?:track|trk)?\\s*(\\d{1,3})(?![0-9A-Za-z])", options: .caseInsensitive)
 
     static func extractTrackNumberFromFilename(_ filename: String) -> Int? {
         let base = (filename as NSString).deletingPathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -252,10 +252,212 @@ enum AppCacheStorage {
             }
         }
     }
+
+    static func directorySizeBytes(at url: URL) -> UInt64 {
+        let fm = FileManager.default
+        let resourceKeys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .totalFileAllocatedSizeKey]
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: resourceKeys,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var total: UInt64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: Set(resourceKeys)),
+                  values.isRegularFile == true else {
+                continue
+            }
+            let size = UInt64(values.totalFileAllocatedSize ?? values.fileSize ?? 0)
+            total += size
+        }
+        return total
+    }
+
+    static func fileSizeBytes(at url: URL) -> UInt64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? UInt64 else {
+            return 0
+        }
+        return size
+    }
+
+    static func formattedByteCount(_ bytes: UInt64) -> String {
+        let clamped = Int64(min(bytes, UInt64(Int64.max)))
+        return ByteCountFormatter.string(fromByteCount: clamped, countStyle: .file)
+    }
+
+    static func clearDirectoryContents(at url: URL) {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) else {
+            return
+        }
+        for item in items {
+            try? fm.removeItem(at: item)
+        }
+    }
+
+    static func removeItemIfExists(at url: URL) {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) {
+            try? fm.removeItem(at: url)
+        }
+    }
+}
+
+struct RemoteSyncStatus: Codable, Equatable {
+    let result: String?
+    let message: String?
+    let lastAttempt: String?
+    let lastSuccess: String?
+    let freeKB: Double?
+}
+
+struct RemoteServerStatus: Codable, Equatable {
+    let status: String
+    let songsCount: Int
+    let playlistsCount: Int?
+    let version: String?
+    let lastSync: RemoteSyncStatus?
+}
+
+enum AlbumGrouping {
+    /// Extracts a normalized primary artist name without splitting multi-artist band names like "Simon & Garfunkel".
+    static func primaryArtistKey(for artist: String) -> String {
+        let trimmed = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "unknown artist" }
+
+        let lowered = trimmed.lowercased()
+        for separator in [" feat. ", " ft. ", " featuring ", " (feat. ", " (ft. ", " [feat. "] {
+            if let range = lowered.range(of: separator) {
+                let prefix = String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !prefix.isEmpty {
+                    return prefix.lowercased()
+                }
+            }
+        }
+        return lowered
+    }
+
+    /// Computes a stable disambiguated remote album key from album title, metadata, and relative path structure.
+    static func remoteAlbumOwnerKey(albumName: String, track: Track) -> String {
+        let cleanAlbum = albumName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if let albumArtist = track.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !albumArtist.isEmpty {
+            return "\(cleanAlbum)__\(albumArtist.lowercased())"
+        }
+
+        // AudioStreamMusic / NAS paths follow Artist/Album/[Disc N/]Track.ext (>= 3 segments).
+        // Avoid using iTunes F00/XXXX.mp3 2-segment directories as artist identifiers.
+        let pathComponents = track.filename
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        if pathComponents.count >= 3, !pathComponents[0].isEmpty {
+            return "\(cleanAlbum)__dir:\(pathComponents[0].lowercased())"
+        }
+
+        return "\(cleanAlbum)__\(primaryArtistKey(for: track.artist))"
+    }
+}
+
+enum LibraryPlaylistBuilder {
+    static func buildSpecialPlaylists(albums: [Album], tracks: [Track], now: Date = Date()) -> [Playlist] {
+        var albumDates: [String: Date] = [:]
+        for album in albums {
+            if let date = album.dateAdded {
+                albumDates[album.id] = date
+                albumDates["\(album.title.lowercased())|\(album.artist.lowercased())"] = date
+            }
+        }
+
+        var tracksWithDates: [(track: Track, date: Date)] = []
+        tracksWithDates.reserveCapacity(tracks.count)
+
+        for track in tracks {
+            var trackDate: Date? = track.dateAdded
+            if trackDate == nil {
+                let directKey = "\(track.album.lowercased())|\(track.artist.lowercased())"
+                trackDate = albumDates[directKey]
+            }
+            if trackDate == nil, let albumArtist = track.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines), !albumArtist.isEmpty {
+                let albumArtistKey = "\(track.album.lowercased())|\(albumArtist.lowercased())"
+                trackDate = albumDates[albumArtistKey]
+            }
+            tracksWithDates.append((track, trackDate ?? Date(timeIntervalSince1970: 0)))
+        }
+
+        let sortedTracksWithDates = tracksWithDates.sorted { lhs, rhs in
+            if lhs.date != rhs.date {
+                return lhs.date > rhs.date
+            }
+            return lhs.track.title.localizedCaseInsensitiveCompare(rhs.track.title) == .orderedAscending
+        }
+
+        let twoWeeksAgo = now.addingTimeInterval(-14 * 24 * 3600)
+        let oneMonthAgo = now.addingTimeInterval(-30 * 24 * 3600)
+        let threeMonthsAgo = now.addingTimeInterval(-90 * 24 * 3600)
+        let sixMonthsAgo = now.addingTimeInterval(-180 * 24 * 3600)
+        let oneYearAgo = now.addingTimeInterval(-365 * 24 * 3600)
+
+        let recentByDate = sortedTracksWithDates.prefix { $0.date >= twoWeeksAgo }.map { $0.track }
+        let recentlyAddedTracks: [Track]
+        if recentByDate.count < 20 {
+            recentlyAddedTracks = Array(sortedTracksWithDates.prefix(100).map { $0.track })
+        } else {
+            recentlyAddedTracks = Array(recentByDate.prefix(100))
+        }
+
+        let monthTracks = sortedTracksWithDates.prefix { $0.date >= oneMonthAgo }.map { $0.track }
+        let threeMonthsTracks = sortedTracksWithDates.prefix { $0.date >= threeMonthsAgo }.map { $0.track }
+        let sixMonthsTracks = sortedTracksWithDates.prefix { $0.date >= sixMonthsAgo }.map { $0.track }
+        let yearTracks = sortedTracksWithDates.prefix { $0.date >= oneYearAgo }.map { $0.track }
+
+        var specialPlaylists: [Playlist] = []
+        if !recentlyAddedTracks.isEmpty {
+            specialPlaylists.append(Playlist(id: -1, name: "Recently Added", songIds: recentlyAddedTracks.map { $0.id }, tracks: recentlyAddedTracks))
+        }
+        if !monthTracks.isEmpty {
+            specialPlaylists.append(Playlist(id: -2, name: "Month", songIds: monthTracks.map { $0.id }, tracks: monthTracks))
+        }
+        if !threeMonthsTracks.isEmpty {
+            specialPlaylists.append(Playlist(id: -3, name: "3 Months", songIds: threeMonthsTracks.map { $0.id }, tracks: threeMonthsTracks))
+        }
+        if !sixMonthsTracks.isEmpty {
+            specialPlaylists.append(Playlist(id: -4, name: "6 Months", songIds: sixMonthsTracks.map { $0.id }, tracks: sixMonthsTracks))
+        }
+        if !yearTracks.isEmpty {
+            specialPlaylists.append(Playlist(id: -5, name: "Year", songIds: yearTracks.map { $0.id }, tracks: yearTracks))
+        }
+
+        return specialPlaylists
+    }
+
+    static func combinePlaylists(userPlaylists: [Playlist], albums: [Album], tracks: [Track], source: LibrarySource, now: Date = Date()) -> [Playlist] {
+        var result = userPlaylists
+        if source == .remote && !result.isEmpty {
+            let tracksById = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            result = result.map { playlist in
+                var p = playlist
+                p.tracks = playlist.songIds.compactMap { tracksById[$0] }
+                return p
+            }
+        }
+
+        result.removeAll { $0.id < 0 }
+        let special = buildSpecialPlaylists(albums: albums, tracks: tracks, now: now)
+        result.insert(contentsOf: special, at: 0)
+        return result
+    }
 }
 
 extension Notification.Name {
     static let trackDidDelete = Notification.Name("trackDidDelete")
     static let albumArtworkDidUpdate = Notification.Name("albumArtworkDidUpdate")
+    static let mergeGroupsDidChange = Notification.Name("mergeGroupsDidChange")
+    static let appStateDidRestore = Notification.Name("appStateDidRestore")
+    static let libraryNeedsRefresh = Notification.Name("libraryNeedsRefresh")
 }
 

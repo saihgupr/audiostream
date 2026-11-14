@@ -84,7 +84,7 @@ struct MusicPlayerScreen: View {
         let artistParts = artistText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
 
         return ZStack(alignment: .topLeading) {
-            MarqueeContainer(id: title) {
+            MarqueeContainer(id: "\(track?.persistentId ?? "")-\(title)") {
                 Text(title)
                     .font(.system(size: M.titleFontSize, weight: .semibold))
                     .foregroundColor(.white)
@@ -92,7 +92,7 @@ struct MusicPlayerScreen: View {
             .frame(width: textWidth, height: M.titleLineHeight)
             .position(x: M.titleLeading + textWidth / 2, y: bottom - M.titleCenterFromBottom)
 
-            MarqueeContainer(id: artistText) {
+            MarqueeContainer(id: "\(track?.persistentId ?? "")-\(artistText)") {
                 HStack(spacing: 0) {
                     ForEach(artistParts.indices, id: \.self) { index in
                         Text(artistParts[index])
@@ -190,22 +190,18 @@ struct MusicPlayerScreen: View {
 
     private func portraitUtilityRow(width w: CGFloat, bottom: CGFloat) -> some View {
         let y = bottom - M.utilityCenterFromBottom
+        let offset = M.utilitySideOffset * 0.55
 
         return ZStack(alignment: .topLeading) {
-            Image(systemName: "quote.bubble.fill")
-                .font(.system(size: 19))
-                .musicAdditive(MusicPlayerAlpha.disabled)
-                .position(x: w / 2 - M.utilitySideOffset, y: y)
-
             airPlayButton
-                .position(x: w / 2, y: y)
+                .position(x: w / 2 - offset, y: y)
 
             queueButton
-                .position(x: w / 2 + M.utilitySideOffset, y: y)
+                .position(x: w / 2 + offset, y: y)
 
             if let badge = queueBadgeSymbol {
                 queueBadge(symbol: badge)
-                    .position(x: w / 2 + M.utilitySideOffset + 12, y: y - 12.3)
+                    .position(x: w / 2 + offset + 12, y: y - 12.3)
             }
 
             Text(audioOutputName)
@@ -275,14 +271,14 @@ struct MusicPlayerScreen: View {
             // 1. Title Block
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    MarqueeContainer(id: title) {
+                    MarqueeContainer(id: "\(track?.persistentId ?? "")-\(title)") {
                         Text(title)
                             .font(.system(size: 19, weight: .semibold))
                             .foregroundColor(.white)
                     }
                     .frame(width: textWidth, height: 24)
 
-                    MarqueeContainer(id: artistText) {
+                    MarqueeContainer(id: "\(track?.persistentId ?? "")-\(artistText)") {
                         HStack(spacing: 0) {
                             ForEach(artistParts.indices, id: \.self) { index in
                                 Text(artistParts[index])
@@ -388,11 +384,6 @@ struct MusicPlayerScreen: View {
             VStack(spacing: 3) {
                 HStack {
                     Spacer()
-                    Image(systemName: "quote.bubble.fill")
-                        .font(.system(size: 19))
-                        .musicAdditive(MusicPlayerAlpha.disabled)
-
-                    Spacer()
 
                     airPlayButton
 
@@ -455,7 +446,7 @@ struct MusicPlayerScreen: View {
         .animation(.spring(response: 0.45, dampingFraction: 0.72), value: audioService.state.isPlaying)
         .onTapGesture {
             if let track = track {
-                navManager.navigateToAlbum(title: track.album)
+                navManager.navigateToAlbum(title: track.album, artist: track.artist)
                 withAnimation { expand = false }
             }
         }

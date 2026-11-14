@@ -11,8 +11,6 @@ struct MergeManagementView: View {
     @ObservedObject var albumMergeService = AlbumMergeService.shared
     @ObservedObject var artistMergeService = ArtistMergeService.shared
     @State private var selectedTab: MergeTab = .albums
-    @State private var restoreSummary: String?
-    @State private var showRestoreAlert = false
     
     var body: some View {
         ZStack {
@@ -46,40 +44,44 @@ struct MergeManagementView: View {
                         }
                     } else {
                         List {
-                            ForEach(albumMergeService.mergeGroups) { group in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(group.targetTitle)
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                    Text("Artist: \(group.targetArtist)")
-                                        .font(.subheadline)
-                                        .foregroundColor(.gray)
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Merged from:")
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
+                            Section {
+                                ForEach(albumMergeService.mergeGroups) { group in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(group.targetTitle)
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                        Text("Artist: \(group.targetArtist)")
+                                            .font(.subheadline)
                                             .foregroundColor(.gray)
-                                            .textCase(.uppercase)
                                         
-                                        ForEach(Array(group.members), id: \.self) { member in
-                                            HStack(spacing: 4) {
-                                                Image(systemName: "music.note")
-                                                    .font(.caption)
-                                                    .foregroundColor(.blue)
-                                                Text("\(member.title) — \(member.artist)")
-                                                    .font(.caption)
-                                                    .foregroundColor(.gray)
-                                                    .lineLimit(1)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Merged from:")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                                .foregroundColor(.gray)
+                                                .textCase(.uppercase)
+                                            
+                                            ForEach(Array(group.members), id: \.self) { member in
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "music.note")
+                                                        .font(.caption)
+                                                        .foregroundColor(.blue)
+                                                    Text("\(member.title) — \(member.artist)")
+                                                        .font(.caption)
+                                                        .foregroundColor(.gray)
+                                                        .lineLimit(1)
+                                                }
                                             }
                                         }
+                                        .padding(.top, 4)
                                     }
-                                    .padding(.top, 4)
+                                    .padding(.vertical, 6)
+                                    .listRowBackground(Color.white.opacity(0.05))
                                 }
-                                .padding(.vertical, 6)
-                                .listRowBackground(Color.white.opacity(0.05))
+                                .onDelete(perform: deleteAlbumMerge)
+                            } footer: {
+                                Color.clear.frame(height: 80)
                             }
-                            .onDelete(perform: deleteAlbumMerge)
                         }
                         .listStyle(InsetGroupedListStyle())
                     }
@@ -102,37 +104,41 @@ struct MergeManagementView: View {
                         }
                     } else {
                         List {
-                            ForEach(artistMergeService.mergeGroups) { group in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(group.targetArtist)
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Merged aliases:")
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
-                                            .foregroundColor(.gray)
-                                            .textCase(.uppercase)
+                            Section {
+                                ForEach(artistMergeService.mergeGroups) { group in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(group.targetArtist)
+                                            .font(.headline)
+                                            .foregroundColor(.white)
                                         
-                                        ForEach(Array(group.members), id: \.self) { member in
-                                            HStack(spacing: 4) {
-                                                Image(systemName: "person.fill")
-                                                    .font(.caption)
-                                                    .foregroundColor(.purple)
-                                                Text(member)
-                                                    .font(.caption)
-                                                    .foregroundColor(.gray)
-                                                    .lineLimit(1)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Merged aliases:")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                                .foregroundColor(.gray)
+                                                .textCase(.uppercase)
+                                            
+                                            ForEach(Array(group.members), id: \.self) { member in
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "person.fill")
+                                                        .font(.caption)
+                                                        .foregroundColor(.purple)
+                                                    Text(member)
+                                                        .font(.caption)
+                                                        .foregroundColor(.gray)
+                                                        .lineLimit(1)
+                                                }
                                             }
                                         }
+                                        .padding(.top, 4)
                                     }
-                                    .padding(.top, 4)
+                                    .padding(.vertical, 6)
+                                    .listRowBackground(Color.white.opacity(0.05))
                                 }
-                                .padding(.vertical, 6)
-                                .listRowBackground(Color.white.opacity(0.05))
+                                .onDelete(perform: deleteArtistMerge)
+                            } footer: {
+                                Color.clear.frame(height: 80)
                             }
-                            .onDelete(perform: deleteArtistMerge)
                         }
                         .listStyle(InsetGroupedListStyle())
                     }
@@ -140,32 +146,7 @@ struct MergeManagementView: View {
             }
         }
         .navigationTitle("Manage Merged Items")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Restore") {
-                    restoreMerges()
-                }
-            }
-        }
-        .alert("Restore Merges", isPresented: $showRestoreAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(restoreSummary ?? "")
-        }
         .preferredColorScheme(.dark)
-    }
-    
-    private func restoreMerges() {
-        do {
-            if let result = try AppStateBackupService.shared.restoreAll() {
-                restoreSummary = result.summary
-            } else {
-                restoreSummary = "No backup found in /var/mobile/Documents."
-            }
-        } catch {
-            restoreSummary = error.localizedDescription
-        }
-        showRestoreAlert = true
     }
     
     private func deleteAlbumMerge(at offsets: IndexSet) {
