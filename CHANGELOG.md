@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Restore from Backup**: Settings > Backup & Restore and Settings > Manage Merged Items can restore the saved state. The restore prefers the copy made by the NAS restore, applies the domain, reloads the merge groups, and asks for a relaunch so connection and playback settings take effect.
 
 ### Fixed
+- **NAS Trash No Longer Fills the Music Disk**: the 80 GB disk behind the mirror was down to 8 GB free because a day of album reorganising leaves a full copy of every moved file in `/music-trash`. The sync now drops trash days whose files are all still in the mirror, caps the trash at 6 GB, and retries rsync once before reporting a failure with the actual rsync error instead of a bare `rsync failed`.
 - **NAS-Only Streaming No Longer Wakes the iPhone**: the app now only sends RemoteCompanion wake requests and adds `iphone.local` as a fallback when the configured server is actually an iPhone. A NAS timeout no longer starts the iPhone streaming daemon.
 - **NAS Stream URL Encoding**: fixed stream URLs being percent-encoded twice (`%2520`), which the iPhone daemon tolerated but the NAS server rejected with a 404. The NAS server also accepts legacy double-encoded paths so older app builds keep working.
 - **Quick Action Fetch Lifetime**: the library service is now kept alive while Shuffle All fetches are in flight, so quick actions no longer receive an empty library.

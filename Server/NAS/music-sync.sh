@@ -7,6 +7,7 @@ DEST="/music/"
 LOCK_FILE="/var/lock/music-sync.lock"
 TRASH_ROOT="/music-trash"
 RETENTION_DAYS=30
+TRASH_MAX_KB=6291456
 MIN_FREE_KB=5242880
 
 MERGE_DIR=/var/lib/music-server
@@ -75,20 +76,69 @@ if [ "${1:-}" = "--verbose" ]; then
 fi
 
 echo "music-sync: starting $(date -Is), remote files=$REMOTE_COUNT, free=${AVAILABLE_KB}KB"
-if ! rsync -rltp --size-only --delete "${VERBOSE[@]}" --stats \
-    --exclude=.daemon_metadata_cache.json \
-    --exclude='._*' \
-    --iconv=UTF-8,UTF-8-MAC \
-    --backup --backup-dir="$DATE_DIR" \
-    --rsync-path=/var/jb/usr/bin/rsync \
-    -e "${SSH_CMD[*]}" \
-    "$REMOTE:$REMOTE_PATH" "$DEST"; then
-    echo "music-sync: rsync failed"
-    write_status "error" "rsync failed"
+
+LOG_FILE="$MERGE_DIR/last-sync.log"
+
+sync_once() {
+    rsync -rltp --size-only --delete "${VERBOSE[@]}" --stats \
+        --exclude=.daemon_metadata_cache.json \
+        --exclude='._*' \
+        --iconv=UTF-8,UTF-8-MAC \
+        --backup --backup-dir="$DATE_DIR" \
+        --rsync-path=/var/jb/usr/bin/rsync \
+        -e "${SSH_CMD[*]}" \
+        "$REMOTE:$REMOTE_PATH" "$DEST" 2>"$LOG_FILE"
+}
+
+sync_failed() {
+    local reason
+    reason=$(grep -v '^[[:space:]]*$' "$LOG_FILE" | tail -1 | tr -d '"\\' | cut -c1-160) || true
+    echo "music-sync: rsync failed: $reason"
+    write_status "error" "${reason:-rsync failed}"
     exit 1
+}
+
+if ! sync_once; then
+    echo "music-sync: rsync failed, retrying in 30s"
+    sleep 30
+    sync_once || sync_failed
 fi
 
+# A day of trash is only worth keeping for files that are gone from the mirror.
+# Reorganised albums leave a full copy of everything behind, so drop those days.
+prune_duplicate_days() {
+    local day list
+    list=$(mktemp)
+    find "$DEST" -type f ! -name '._*' -printf '%s %f\n' | sort > "$list"
+    while IFS= read -r day; do
+        [ -n "$day" ] || continue
+        if ! comm -23 \
+            <(find "$day" -type f ! -name '._*' ! -name '.DS_Store' ! -name '.Media*' -printf '%s %f\n' | sort) \
+            "$list" | grep -q .; then
+            echo "music-sync: dropping $day, every file is still in $DEST"
+            rm -rf -- "$day"
+        fi
+    done < <(find "$TRASH_ROOT" -mindepth 1 -maxdepth 1 -type d -mtime +1)
+    rm -f "$list"
+}
+
+enforce_trash_cap() {
+    local total day
+    total=$(du -sk "$TRASH_ROOT" | awk '{print $1}')
+    while [ "${total:-0}" -gt "$TRASH_MAX_KB" ]; do
+        day=$(find "$TRASH_ROOT" -mindepth 1 -maxdepth 1 -type d | sort | head -1)
+        if [ -z "$day" ]; then
+            break
+        fi
+        echo "music-sync: trash is over $((TRASH_MAX_KB / 1024)) MB, dropping $day"
+        rm -rf -- "$day"
+        total=$(du -sk "$TRASH_ROOT" | awk '{print $1}')
+    done
+}
+
 find "$TRASH_ROOT" -mindepth 1 -maxdepth 1 -type d -mtime +"$RETENTION_DAYS" -exec rm -rf {} +
+prune_duplicate_days
+enforce_trash_cap
 
 curl -s --max-time 30 http://127.0.0.1:18080/api/rescan >/dev/null 2>&1 || true
 

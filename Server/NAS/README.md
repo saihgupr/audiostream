@@ -53,10 +53,18 @@ inside the same LXC. The script is `/usr/local/bin/music-sync.sh`.
 - `--size-only` so unchanged files are not re-read.
 - `--delete` with `--backup --backup-dir=/music-trash/YYYY-MM-DD` so removed or
   replaced files are recoverable for 30 days.
+- Trash days whose files are all still in the mirror (albums that were only
+  renamed or regrouped) are dropped on the next run, and the whole trash folder
+  is kept under 6 GB by dropping the oldest day first. The music disk is 80 GB
+  and the library already fills most of it.
 - Refuses to run if the iPhone is unreachable or reports fewer than 100 files.
 - `--iconv=UTF-8,UTF-8-MAC` normalizes macOS filenames.
+- Retries once after 30 seconds when rsync fails, so a flaky phone connection
+  does not raise an alert.
 - Writes `/var/lib/music-server/sync-status.json` on every attempt with the
-  result, file counts, free space, and the last success time.
+  result, message, file counts, free space, and the last success time. On
+  failure the message carries the last rsync error, and the full output is kept
+  in `/var/lib/music-server/last-sync.log`.
 
 ## Monitoring
 
